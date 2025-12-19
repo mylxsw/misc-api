@@ -7,11 +7,14 @@ Response: {"voice_b64": "base64编码的音频数据", "request_id": "...", "fir
 """
 import base64
 import os
-from typing import Tuple
+from typing import Tuple, List
+from io import BytesIO
 
 from flask import Flask, jsonify, request
 import dashscope
 from dashscope.audio.tts_v2 import SpeechSynthesizer
+import requests
+from PIL import Image
 
 # Resolve and validate the dashscope API key early so we can return a clearer error
 # instead of a TypeError from the SDK when it tries to concat None.
@@ -57,10 +60,71 @@ def cosyvoice_endpoint():
     )
 
 
+def stitch_images(image_list: List[str], direction: str = "horizontal") -> str:
+    images = []
+    for img_str in image_list:
+        try:
+            if img_str.startswith("http://") or img_str.startswith("https://"):
+                response = requests.get(img_str, timeout=10)
+                response.raise_for_status()
+                img_data = response.content
+            else:
+                # Handle base64
+                if "," in img_str:
+                    img_str = img_str.split(",", 1)[1]
+                img_data = base64.b64decode(img_str)
+            
+            images.append(Image.open(BytesIO(img_data)))
+        except Exception as e:
+            print(f"Error loading image: {e}")
+            continue
+
+    if not images:
+        raise ValueError("No valid images to stitch")
+
+    if direction == "vertical":
+        width = max(img.width for img in images)
+        height = sum(img.height for img in images)
+        result = Image.new("RGB", (width, height))
+        y_offset = 0
+        for img in images:
+            result.paste(img, (0, y_offset))
+            y_offset += img.height
+    else:  # horizontal
+        width = sum(img.width for img in images)
+        height = max(img.height for img in images)
+        result = Image.new("RGB", (width, height))
+        x_offset = 0
+        for img in images:
+            result.paste(img, (x_offset, 0))
+            x_offset += img.width
+
+    buffered = BytesIO()
+    result.save(buffered, format="PNG")
+    return base64.b64encode(buffered.getvalue()).decode("ascii")
+
+
+@app.route("/v1/image/stitch", methods=["POST"])
+def stitch_endpoint():
+    payload = request.get_json(silent=True) or {}
+    images = payload.get("images") or []
+    direction = payload.get("direction") or "horizontal"
+
+    if not images or not isinstance(images, list):
+         return jsonify({"error": "parameter 'images' is required and must be a list"}), 400
+
+    try:
+        result_b64 = stitch_images(images, direction)
+        return jsonify({"image_b64": result_b64})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 def create_app() -> Flask:
     """Flask factory for WSGI/ASGI servers."""
     return app
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000, debug=False)
+    port = int(os.getenv("PORT", 8000))
+    app.run(host="0.0.0.0", port=port, debug=False)

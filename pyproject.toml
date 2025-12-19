@@ -7,6 +7,8 @@ dependencies = [
     "flask",
     "gunicorn",
     "dashscope",
+    "pillow",
+    "requests",
 ]
 
 [tool.uv]
