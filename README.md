@@ -2,7 +2,7 @@
 
 A Flask-based HTTP API service that integrates multiple AI media generation capabilities:
 - **Alibaba Cloud DashScope CosyVoice TTS**: High-quality text-to-speech synthesis.
-- **Volcano Engine Podcast TTS**: Multi-speaker, conversational podcast generation with music support.
+- **Volcano Engine Podcast TTS** ([Official Docs](https://www.volcengine.com/docs/6561/1668014?lang=zh)): Multi-speaker, conversational podcast generation with music support.
 - **Image Stitching**: Utility to stitch multiple images vertically or horizontally.
 
 This service exposes these capabilities via simple RESTful endpoints, returning base64-encoded results.
@@ -57,6 +57,7 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
 
 
 - **POST** `/v1/voice/podcast`
+  > Official Documentation: [Volcano Engine Podcast TTS](https://www.volcengine.com/docs/6561/1668014?lang=zh)
 - Body (JSON):
   ```json
   {
@@ -78,7 +79,7 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
   
   **Available Speakers**:
   
-  > 💡 Note: Speakers from the same series work best together. Default series is `dayi/mizai`.
+  > 💡 Note: Speakers from the same series work best together. Default series is `dayi/mizai`. 
   
   | Series | Speaker ID |
   | :--- | :--- |
