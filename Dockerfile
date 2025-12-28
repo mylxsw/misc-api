@@ -27,4 +27,4 @@ COPY . .
 EXPOSE 8000
 
 # Run with production-grade WSGI server.
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "server:create_app()"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--timeout", "600", "server:create_app()"]
