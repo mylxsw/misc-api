@@ -9,6 +9,7 @@ dependencies = [
     "dashscope",
     "pillow",
     "requests",
+    "websockets>=15.0.1",
 ]
 
 [tool.uv]

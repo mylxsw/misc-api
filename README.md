@@ -1,11 +1,25 @@
-# CosyVoice TTS API
+# AI Media Services API
 
-Flask-based HTTP API that wraps Alibaba Cloud DashScope CosyVoice TTS. It accepts text and returns base64-encoded audio.
+A Flask-based HTTP API service that integrates multiple AI media generation capabilities:
+- **Alibaba Cloud DashScope CosyVoice TTS**: High-quality text-to-speech synthesis.
+- **Volcano Engine Podcast TTS**: Multi-speaker, conversational podcast generation with music support.
+- **Image Stitching**: Utility to stitch multiple images vertically or horizontally.
+
+This service exposes these capabilities via simple RESTful endpoints, returning base64-encoded results.
 
 ## Requirements
 - Python 3.11+
 - DashScope API key: set `DASHSCOPE_API_KEY`
 - Optional: Docker
+
+## Environment Variables
+The following environment variables are required to run the service:
+
+| Variable | Description | Required | 
+| :--- | :--- | :--- |
+| `DASHSCOPE_API_KEY` | Alibaba Cloud DashScope API Key (for CosyVoice) | Yes |
+| `VOLC_APPID` | Volcano Engine App ID (for Podcast TTS) | Yes (for Podcast) |
+| `VOLC_ACCESS_TOKEN` | Volcano Engine Access Token (for Podcast TTS) | Yes (for Podcast) |
 
 ## Quick start (local)
 ```bash
@@ -39,6 +53,48 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
     "first_package_delay_ms": 123
   }
   ```
+
+
+
+- **POST** `/v1/voice/podcast`
+- Body (JSON):
+  ```json
+  {
+      "scripts": [
+          {
+              "speaker": "zh_male_dayixiansheng_v2_saturn_bigtts",
+              "text": "今天呢我们要聊的呢是火山引擎在这个 FORCE 原动力大会上面的一些比较重磅的发布。"
+          },
+          {
+              "speaker": "zh_female_mizaitongxue_v2_saturn_bigtts",
+              "text": "来看看都有哪些亮点哈。"
+          }
+      ]
+  }
+  ```
+  - `scripts` (required): List of script objects containing `speaker` and `text`
+  - `use_head_music` (optional): Boolean, default `false`
+  - `use_tail_music` (optional): Boolean, default `false`
+  
+  **Available Speakers**:
+  
+  > 💡 Note: Speakers from the same series work best together. Default series is `dayi/mizai`.
+  
+  | Series | Speaker ID |
+  | :--- | :--- |
+  | **Black Cat Detective Agency Mizai** | `zh_female_mizaitongxue_v2_saturn_bigtts` |
+  | | `zh_male_dayixiansheng_v2_saturn_bigtts` |
+  | **Liu Fei and Xiaolei** | `zh_male_liufei_v2_saturn_bigtts` |
+  | | `zh_male_xiaolei_v2_saturn_bigtts` |
+- Response:
+  ```json
+  {
+    "voice_b64": "<base64 audio>"
+  }
+  ```
+- Environment Variables Required:
+  - `VOLC_APPID`
+  - `VOLC_ACCESS_TOKEN`
 
 Sample request:
 ```bash

@@ -8,3 +8,4 @@ Makefile.local
 .DS_Store
 .venv/
 *.mp3
+.env

@@ -1,0 +1,10 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - VOLC_APPID=${VOLC_APPID}
+      - VOLC_ACCESS_TOKEN=${VOLC_ACCESS_TOKEN}
+    restart: unless-stopped

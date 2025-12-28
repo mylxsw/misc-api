@@ -15,6 +15,8 @@ import dashscope
 from dashscope.audio.tts_v2 import SpeechSynthesizer
 import requests
 from PIL import Image
+import asyncio
+from lib.podcast.client import PodcastTTSClient
 
 # Resolve and validate the dashscope API key early so we can return a clearer error
 # instead of a TypeError from the SDK when it tries to concat None.
@@ -27,6 +29,9 @@ app = Flask(__name__)
 
 DEFAULT_MODEL = "cosyvoice-v2"
 DEFAULT_VOICE = "libai_v2"
+
+_volc_appid = os.getenv("VOLC_APPID")
+_volc_access_token = os.getenv("VOLC_ACCESS_TOKEN")
 
 
 def synthesize(text: str, voice: str) -> Tuple[bytes, str, int]:
@@ -102,6 +107,29 @@ def stitch_images(image_list: List[str], direction: str = "horizontal") -> str:
     buffered = BytesIO()
     result.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode("ascii")
+
+
+@app.route("/v1/voice/podcast", methods=["POST"])
+def podcast_endpoint():
+    payload = request.get_json(silent=True) or {}
+    scripts = payload.get("scripts")
+    use_head_music = payload.get("use_head_music") or False
+    use_tail_music = payload.get("use_tail_music") or False
+    
+    if not scripts or not isinstance(scripts, list):
+         return jsonify({"error": "parameter 'scripts' is required and must be a list"}), 400
+
+    if not _volc_appid or not _volc_access_token:
+         return jsonify({"error": "VOLC_APPID or VOLC_ACCESS_TOKEN not set on server"}), 500
+
+    try:
+        client = PodcastTTSClient(appid=_volc_appid, access_token=_volc_access_token)
+        # Using asyncio.run to call async code from synchronous Flask view
+        audio_bytes = asyncio.run(client.generate_audio(scripts, use_head_music=use_head_music, use_tail_music=use_tail_music))
+        voice_b64 = base64.b64encode(audio_bytes).decode("ascii")
+        return jsonify({"voice_b64": voice_b64})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/v1/image/stitch", methods=["POST"])
