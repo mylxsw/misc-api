@@ -10,6 +10,7 @@ dependencies = [
     "pillow",
     "requests",
     "websockets>=15.0.1",
+    "redis",
 ]
 
 [tool.uv]

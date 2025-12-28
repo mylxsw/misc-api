@@ -7,4 +7,16 @@ services:
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - VOLC_APPID=${VOLC_APPID}
       - VOLC_ACCESS_TOKEN=${VOLC_ACCESS_TOKEN}
+      - REDIS_URL=redis://redis:6379/0
     restart: unless-stopped
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:

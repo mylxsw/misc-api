@@ -90,12 +90,44 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
 - Response:
   ```json
   {
-    "voice_b64": "<base64 audio>"
+    "task_id": "uuid-string"
   }
   ```
+
+- **GET** `/v1/voice/podcast/<task_id>`
+- Response:
+  - Processing:
+    ```json
+    {
+      "status": "processing",
+      "created_at": 1700000000.0,
+      "task_id": "..."
+    }
+    ```
+  - Success:
+    ```json
+    {
+      "status": "success",
+      "voice_b64": "<base64 audio>",
+      "created_at": ...,
+      "task_id": "..."
+    }
+    ```
+  - Failed:
+    ```json
+    {
+      "status": "failed",
+      "error": "error message",
+      "created_at": ...,
+      "task_id": "..."
+    }
+    ```
+  > Note: Task results are stored for 7 days.
+
 - Environment Variables Required:
   - `VOLC_APPID`
   - `VOLC_ACCESS_TOKEN`
+  - `REDIS_URL` (default: `redis://localhost:6379/0`)
 
 Sample request:
 ```bash

@@ -16,6 +16,11 @@ from dashscope.audio.tts_v2 import SpeechSynthesizer
 import requests
 from PIL import Image
 import asyncio
+import threading
+import json
+import time
+import uuid
+import redis
 from lib.podcast.client import PodcastTTSClient
 
 # Resolve and validate the dashscope API key early so we can return a clearer error
@@ -32,6 +37,10 @@ DEFAULT_VOICE = "libai_v2"
 
 _volc_appid = os.getenv("VOLC_APPID")
 _volc_access_token = os.getenv("VOLC_ACCESS_TOKEN")
+
+_redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+redis_client = redis.from_url(_redis_url)
+REDIS_TTL = 7 * 24 * 3600  # 7 days
 
 
 def synthesize(text: str, voice: str) -> Tuple[bytes, str, int]:
@@ -122,14 +131,62 @@ def podcast_endpoint():
     if not _volc_appid or not _volc_access_token:
          return jsonify({"error": "VOLC_APPID or VOLC_ACCESS_TOKEN not set on server"}), 500
 
+    task_id = str(uuid.uuid4())
+    
+    # Initialize task status in Redis
+    task_info = {
+        "status": "processing",
+        "created_at": time.time(),
+        "task_id": task_id
+    }
+    redis_client.setex(f"podcast_task:{task_id}", REDIS_TTL, json.dumps(task_info))
+
+    # Start background task
+    thread = threading.Thread(
+        target=process_podcast_task,
+        args=(task_id, scripts, use_head_music, use_tail_music)
+    )
+    thread.start()
+
+    return jsonify({"task_id": task_id})
+
+
+@app.route("/v1/voice/podcast/<task_id>", methods=["GET"])
+def query_podcast_task(task_id):
+    data = redis_client.get(f"podcast_task:{task_id}")
+    if not data:
+        return jsonify({"error": "Task not found"}), 404
+        
+    return jsonify(json.loads(data))
+
+
+def process_podcast_task(task_id, scripts, use_head_music, use_tail_music):
     try:
         client = PodcastTTSClient(appid=_volc_appid, access_token=_volc_access_token)
-        # Using asyncio.run to call async code from synchronous Flask view
-        audio_bytes = asyncio.run(client.generate_audio(scripts, use_head_music=use_head_music, use_tail_music=use_tail_music))
+        # Using asyncio.run to call async code
+        audio_bytes = asyncio.run(client.generate_audio(
+            scripts, 
+            use_head_music=use_head_music, 
+            use_tail_music=use_tail_music
+        ))
         voice_b64 = base64.b64encode(audio_bytes).decode("ascii")
-        return jsonify({"voice_b64": voice_b64})
+        
+        # Update success status
+        task_info = {
+            "status": "success",
+            "voice_b64": voice_b64,
+            "created_at": time.time(), # Update time or keep original? Keeping simple.
+            "task_id": task_id
+        }
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        task_info = {
+            "status": "failed",
+            "error": str(e),
+            "created_at": time.time(),
+            "task_id": task_id
+        }
+    
+    redis_client.setex(f"podcast_task:{task_id}", REDIS_TTL, json.dumps(task_info))
 
 
 @app.route("/v1/image/stitch", methods=["POST"])
