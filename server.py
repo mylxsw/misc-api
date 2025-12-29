@@ -43,9 +43,9 @@ redis_client = redis.from_url(_redis_url)
 REDIS_TTL = 7 * 24 * 3600  # 7 days
 
 
-def synthesize(text: str, voice: str, model: str = DEFAULT_MODEL) -> Tuple[bytes, str, int]:
+def synthesize(text: str, voice: str, model: str = DEFAULT_MODEL, **kwargs) -> Tuple[bytes, str, int]:
     """Run CosyVoice TTS and return audio bytes plus request metadata."""
-    synthesizer = SpeechSynthesizer(model=model, voice=voice)
+    synthesizer = SpeechSynthesizer(model=model, voice=voice, **kwargs)
     audio = synthesizer.call(text)
     return audio, synthesizer.get_last_request_id(), synthesizer.get_first_package_delay()
 
@@ -56,12 +56,18 @@ def cosyvoice_endpoint():
     text = (payload.get("text") or "").strip()
     voice = payload.get("voice") or DEFAULT_VOICE
     model = payload.get("model") or DEFAULT_MODEL
+    
+    # Optional parameters
+    kwargs = {}
+    for param in ["volume", "speech_rate", "pitch_rate", "instruction", "language_hints"]:
+        if param in payload:
+            kwargs[param] = payload[param]
 
     if not text:
         return jsonify({"error": "parameter 'text' is required"}), 400
 
     try:
-        audio, request_id, first_pkg_delay = synthesize(text=text, voice=voice, model=model)
+        audio, request_id, first_pkg_delay = synthesize(text=text, voice=voice, model=model, **kwargs)
     except Exception as exc:  # dashscope errors propagate here
         return jsonify({"error": str(exc)}), 500
 
