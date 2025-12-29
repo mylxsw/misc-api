@@ -81,6 +81,73 @@ def cosyvoice_endpoint():
     )
 
 
+def process_cosyvoice_task(task_id, text, voice, model, kwargs):
+    try:
+        audio, request_id, first_pkg_delay = synthesize(text=text, voice=voice, model=model, **kwargs)
+        voice_b64 = base64.b64encode(audio).decode("ascii")
+        
+        task_info = {
+            "status": "success",
+            "voice_b64": voice_b64,
+            "request_id": request_id,
+            "first_package_delay_ms": first_pkg_delay,
+            "created_at": time.time(),
+            "task_id": task_id
+        }
+    except Exception as e:
+        task_info = {
+            "status": "failed",
+            "error": str(e),
+            "created_at": time.time(),
+            "task_id": task_id
+        }
+    
+    redis_client.setex(f"cosyvoice_task:{task_id}", REDIS_TTL, json.dumps(task_info))
+
+
+@app.route("/v1/voice/cosyvoice/async", methods=["POST"])
+def async_cosyvoice_endpoint():
+    payload = request.get_json(silent=True) or {}
+    text = (payload.get("text") or "").strip()
+    voice = payload.get("voice") or DEFAULT_VOICE
+    model = payload.get("model") or DEFAULT_MODEL
+    
+    # Optional parameters
+    kwargs = {}
+    for param in ["volume", "speech_rate", "pitch_rate", "instruction", "language_hints"]:
+        if param in payload:
+            kwargs[param] = payload[param]
+
+    if not text:
+        return jsonify({"error": "parameter 'text' is required"}), 400
+
+    task_id = str(uuid.uuid4())
+    
+    task_info = {
+        "status": "processing",
+        "created_at": time.time(),
+        "task_id": task_id
+    }
+    redis_client.setex(f"cosyvoice_task:{task_id}", REDIS_TTL, json.dumps(task_info))
+
+    thread = threading.Thread(
+        target=process_cosyvoice_task,
+        args=(task_id, text, voice, model, kwargs)
+    )
+    thread.start()
+
+    return jsonify({"task_id": task_id})
+
+
+@app.route("/v1/voice/cosyvoice/async/<task_id>", methods=["GET"])
+def query_cosyvoice_task(task_id):
+    data = redis_client.get(f"cosyvoice_task:{task_id}")
+    if not data:
+        return jsonify({"error": "Task not found"}), 404
+        
+    return jsonify(json.loads(data))
+
+
 def stitch_images(image_list: List[str], direction: str = "horizontal") -> str:
     images = []
     for img_str in image_list:
