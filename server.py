@@ -22,6 +22,8 @@ import time
 import uuid
 import redis
 from lib.podcast.client import PodcastTTSClient
+from fishaudio import FishAudio
+from fishaudio.types import TTSConfig, Prosody
 
 # Resolve and validate the dashscope API key early so we can return a clearer error
 # instead of a TypeError from the SDK when it tries to concat None.
@@ -261,6 +263,107 @@ def process_podcast_task(task_id, scripts, use_head_music, use_tail_music):
         }
     
     redis_client.setex(f"podcast_task:{task_id}", REDIS_TTL, json.dumps(task_info))
+
+
+
+def process_fish_audio_task(task_id: str, text: str, reference_id: str = None, 
+                            reference_audio: str = None, speed: float = 1.0, 
+                            volume: int = 0, output_format: str = "mp3", 
+                            latency: str = "normal"):
+    """
+    Process Fish Audio TTS task in background.
+    """
+    try:
+        api_key = os.getenv("FISH_API_KEY")
+        if not api_key:
+             raise ValueError("FISH_API_KEY environment variable is not set")
+
+        client = FishAudio(api_key=api_key)
+
+        config_kwargs = {
+            "prosody": Prosody(speed=speed, volume=volume),
+            "format": output_format,
+            "latency": latency,
+        }
+
+        if reference_id:
+            config_kwargs["reference_id"] = reference_id
+        elif reference_audio:
+            if os.path.exists(reference_audio):
+                with open(reference_audio, "rb") as f:
+                    config_kwargs["reference_audio"] = f.read()
+            else:
+                 raise ValueError(f"Reference audio file not found: {reference_audio}")
+        
+        config = TTSConfig(**config_kwargs)
+        
+        # Audio comes back as an iterator or bytes depending on SDK version.
+        # Based on user script: audio = client.tts.convert(text=text, config=config)
+        # and save(audio, ...) where save consumes it.
+        # We need bytes.
+        
+        audio_generator = client.tts.convert(text=text, config=config)
+        audio_content = b"".join(audio_generator)
+
+        voice_b64 = base64.b64encode(audio_content).decode("ascii")
+
+        task_info = {
+            "status": "success",
+            "voice_b64": voice_b64,
+            "created_at": time.time(),
+            "task_id": task_id,
+        }
+    except Exception as e:
+        task_info = {
+            "status": "failed",
+            "error": str(e),
+            "created_at": time.time(),
+            "task_id": task_id
+        }
+
+    redis_client.setex(f"fishaudio_task:{task_id}", REDIS_TTL, json.dumps(task_info))
+
+
+@app.route("/v1/voice/fish-audio/text-to-speech", methods=["POST"])
+def fish_audio_tts_endpoint():
+    payload = request.get_json(silent=True) or {}
+    text = (payload.get("text") or "").strip()
+    
+    if not text:
+        return jsonify({"error": "parameter 'text' is required"}), 400
+
+    reference_id = payload.get("reference_id")
+    reference_audio = payload.get("reference_audio")
+    speed = float(payload.get("speed", 1.0))
+    volume = int(payload.get("volume", 0))
+    output_format = payload.get("format", "mp3")
+    latency = payload.get("latency", "normal")
+
+    task_id = str(uuid.uuid4())
+    
+    task_info = {
+        "status": "processing",
+        "created_at": time.time(),
+        "task_id": task_id
+    }
+    redis_client.setex(f"fishaudio_task:{task_id}", REDIS_TTL, json.dumps(task_info))
+
+    thread = threading.Thread(
+        target=process_fish_audio_task,
+        args=(task_id, text, reference_id, reference_audio, speed, volume, output_format, latency)
+    )
+    thread.start()
+
+    return jsonify({"task_id": task_id})
+
+
+@app.route("/v1/voice/fish-audio/text-to-speech/<task_id>", methods=["GET"])
+def query_fish_audio_task(task_id):
+    data = redis_client.get(f"fishaudio_task:{task_id}")
+    if not data:
+        return jsonify({"error": "Task not found"}), 404
+        
+    return jsonify(json.loads(data))
 
 
 @app.route("/v1/image/stitch", methods=["POST"])

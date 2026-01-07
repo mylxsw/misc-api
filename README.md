@@ -3,6 +3,7 @@
 A Flask-based HTTP API service that integrates multiple AI media generation capabilities:
 - **Alibaba Cloud DashScope CosyVoice TTS**: High-quality text-to-speech synthesis.
 - **Volcano Engine Podcast TTS** ([Official Docs](https://www.volcengine.com/docs/6561/1668014?lang=zh)): Multi-speaker, conversational podcast generation with music support.
+- **Fish Audio TTS**: Text-to-speech synthesis using Fish Audio SDK.
 - **Image Stitching**: Utility to stitch multiple images vertically or horizontally.
 
 This service exposes these capabilities via simple RESTful endpoints, returning base64-encoded results.
@@ -20,6 +21,7 @@ The following environment variables are required to run the service:
 | `DASHSCOPE_API_KEY` | Alibaba Cloud DashScope API Key (for CosyVoice) | Yes |
 | `VOLC_APPID` | Volcano Engine App ID (for Podcast TTS) | Yes (for Podcast) |
 | `VOLC_ACCESS_TOKEN` | Volcano Engine Access Token (for Podcast TTS) | Yes (for Podcast) |
+| `FISH_API_KEY` | Fish Audio API Key | Yes (for Fish Audio) |
 
 ## Quick start (local)
 ```bash
@@ -128,6 +130,60 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
   - `VOLC_APPID`
   - `VOLC_ACCESS_TOKEN`
   - `REDIS_URL` (default: `redis://localhost:6379/0`)
+
+- **POST** `/v1/voice/fish-audio/text-to-speech`
+- Body (JSON):
+  ```json
+  {
+      "text": "Hello, world!",
+      "reference_id": "optional_voice_id",
+      "speed": 1.0,
+      "volume": 0,
+      "format": "mp3"
+  }
+  ```
+  - `text` (required): Text to convert
+  - `reference_id` (optional): Reference ID for platform voice
+  - `reference_audio` (optional): Path to local reference audio file (server-side)
+  - `speed` (optional): Float, default 1.0
+  - `volume` (optional): Int, default 0
+  - `format` (optional): "mp3" (default), "wav", "pcm", "opus"
+  - `latency` (optional): "normal" (default), "balanced"
+- Response:
+  ```json
+  {
+      "task_id": "uuid-string"
+  }
+  ```
+
+- **GET** `/v1/voice/fish-audio/text-to-speech/<task_id>`
+- Response:
+  - Processing:
+    ```json
+    {
+      "status": "processing",
+      "created_at": 1700000000.0,
+      "task_id": "..."
+    }
+    ```
+  - Success:
+    ```json
+    {
+      "status": "success",
+      "voice_b64": "<base64 audio>",
+      "created_at": ...,
+      "task_id": "..."
+    }
+    ```
+  - Failed:
+    ```json
+    {
+      "status": "failed",
+      "error": "error message",
+      "created_at": ...,
+      "task_id": "..."
+    }
+    ```
 
 Sample request:
 ```bash

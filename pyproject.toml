@@ -11,7 +11,5 @@ dependencies = [
     "requests",
     "websockets>=15.0.1",
     "redis",
+    "fish-audio-sdk",
 ]
-
-[tool.uv]
-dev-dependencies = []
