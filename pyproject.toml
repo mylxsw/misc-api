@@ -12,4 +12,9 @@ dependencies = [
     "websockets>=15.0.1",
     "redis",
     "fish-audio-sdk",
+    "markdown",
+    "beautifulsoup4",
+    "cssutils",
+    "pyyaml",
+    "pygments",
 ]

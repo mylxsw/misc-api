@@ -22,6 +22,18 @@ import time
 import uuid
 import redis
 from lib.podcast.client import PodcastTTSClient
+from lib.wechat import (
+    WeChatConverter,
+    load_theme,
+    list_themes,
+    preview_html,
+    rewrite_image_srcs,
+    get_access_token,
+    upload_image_bytes,
+    upload_thumb_bytes,
+    load_image_bytes,
+    create_draft,
+)
 from fishaudio import FishAudio
 from fishaudio.types import TTSConfig, Prosody
 
@@ -380,6 +392,173 @@ def stitch_endpoint():
         return jsonify({"image_b64": result_b64})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+DEFAULT_WECHAT_THEME = "professional-clean"
+_wechat_appid = os.getenv("WECHAT_APPID")
+_wechat_secret = os.getenv("WECHAT_SECRET")
+
+
+def _convert_markdown(markdown_text, theme_name):
+    """Convert Markdown to WeChat inline-style HTML using the named theme.
+
+    Returns (converter_result, theme). Raises ValueError/FileNotFoundError on
+    a bad theme name.
+    """
+    theme = load_theme(theme_name)
+    converter = WeChatConverter(theme=theme)
+    result = converter.convert(markdown_text)
+    return result, theme
+
+
+@app.route("/v1/wechat/markdown/themes", methods=["GET"])
+def wechat_themes_endpoint():
+    """List the排版主题 (layout themes) available to the markdown converter."""
+    names = list_themes()
+    themes = []
+    for name in names:
+        try:
+            theme = load_theme(name)
+            themes.append({"name": name, "description": theme.description})
+        except Exception:
+            themes.append({"name": name, "description": ""})
+    return jsonify({"themes": themes})
+
+
+@app.route("/v1/wechat/markdown/preview", methods=["POST"])
+def wechat_preview_endpoint():
+    """Render Markdown to WeChat-compatible HTML for preview.
+
+    Payload:
+      markdown  (str, required)  Markdown source
+      theme     (str, optional)  theme name, default "professional-clean"
+      title     (str, optional)  override the extracted H1 title
+      full_page (bool, optional) wrap body HTML in a full HTML document
+                                 (browser preview only, not for WeChat)
+    Response: {html, title, digest, images, theme}
+    """
+    payload = request.get_json(silent=True) or {}
+    markdown_text = (payload.get("markdown") or "").strip()
+    theme_name = payload.get("theme") or DEFAULT_WECHAT_THEME
+    full_page = bool(payload.get("full_page") or False)
+
+    if not markdown_text:
+        return jsonify({"error": "parameter 'markdown' is required"}), 400
+
+    try:
+        result, theme = _convert_markdown(markdown_text, theme_name)
+    except FileNotFoundError:
+        return jsonify({"error": f"theme not found: {theme_name}"}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    html = preview_html(result.html, theme) if full_page else result.html
+    title = payload.get("title") or result.title
+
+    return jsonify(
+        {
+            "html": html,
+            "title": title,
+            "digest": result.digest,
+            "images": result.images,
+            "theme": theme_name,
+        }
+    )
+
+
+@app.route("/v1/wechat/markdown/draft", methods=["POST"])
+def wechat_draft_endpoint():
+    """Convert Markdown and push it into the WeChat Official Account draft box.
+
+    Payload:
+      markdown  (str, required)   Markdown source
+      appid     (str, optional)   WeChat AppID   (falls back to WECHAT_APPID env)
+      secret    (str, optional)   WeChat AppSecret (falls back to WECHAT_SECRET env)
+      theme     (str, optional)   theme name, default "professional-clean"
+      title     (str, optional)   override the article title
+      author    (str, optional)   article author
+      digest    (str, optional)   override the summary (<=120 UTF-8 bytes)
+      cover     (str, optional)   cover image as URL / data URI / base64;
+                                  uploaded as the article thumbnail
+      content_source_url (str, optional) "阅读原文" link
+    Response: {media_id, title, digest, theme, images_uploaded}
+    """
+    payload = request.get_json(silent=True) or {}
+    markdown_text = (payload.get("markdown") or "").strip()
+    theme_name = payload.get("theme") or DEFAULT_WECHAT_THEME
+    appid = payload.get("appid") or _wechat_appid
+    secret = payload.get("secret") or _wechat_secret
+
+    if not markdown_text:
+        return jsonify({"error": "parameter 'markdown' is required"}), 400
+    if not appid or not secret:
+        return jsonify({"error": "'appid' and 'secret' are required (or set WECHAT_APPID/WECHAT_SECRET)"}), 400
+
+    try:
+        result, _theme = _convert_markdown(markdown_text, theme_name)
+    except FileNotFoundError:
+        return jsonify({"error": f"theme not found: {theme_name}"}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    try:
+        token = get_access_token(appid, secret)
+
+        # Upload inline images and rewrite their src so the article references
+        # WeChat-hosted URLs (external/base64 images are otherwise blocked).
+        # Rewriting happens on the parsed DOM (not string replacement) so URLs
+        # with '&' and prefix-colliding URLs are handled correctly, and each
+        # distinct src is uploaded at most once.
+        def _resolve_image(src):
+            if src.startswith("#"):
+                return None  # in-page anchor, not an image reference
+            # Protocol-relative URLs (//host/path) are real external images
+            # WeChat blocks; normalize so they get uploaded like any http(s) src.
+            resolve_src = "https:" + src if src.startswith("//") else src
+            try:
+                data, filename = load_image_bytes(resolve_src)
+            except Exception:
+                # Not a resolvable/uploadable image (relative path, non-image
+                # data, unreachable URL) — leave the original src untouched.
+                return None
+            return upload_image_bytes(token, data, filename)
+
+        html, images_uploaded = rewrite_image_srcs(result.html, _resolve_image)
+
+        # Upload cover image as permanent material (article thumbnail).
+        thumb_media_id = None
+        cover = payload.get("cover")
+        if cover:
+            try:
+                cover_data, cover_name = load_image_bytes(cover)
+            except Exception as exc:
+                return jsonify({"error": f"invalid cover image: {exc}"}), 400
+            thumb_media_id = upload_thumb_bytes(token, cover_data, cover_name)
+
+        title = payload.get("title") or result.title or "无标题"
+        digest = payload.get("digest") or result.digest
+
+        draft = create_draft(
+            access_token=token,
+            title=title,
+            html=html,
+            digest=digest,
+            thumb_media_id=thumb_media_id,
+            author=payload.get("author"),
+            content_source_url=payload.get("content_source_url"),
+        )
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    return jsonify(
+        {
+            "media_id": draft.media_id,
+            "title": title,
+            "digest": digest,
+            "theme": theme_name,
+            "images_uploaded": images_uploaded,
+        }
+    )
 
 
 def create_app() -> Flask:

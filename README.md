@@ -22,6 +22,8 @@ The following environment variables are required to run the service:
 | `VOLC_APPID` | Volcano Engine App ID (for Podcast TTS) | Yes (for Podcast) |
 | `VOLC_ACCESS_TOKEN` | Volcano Engine Access Token (for Podcast TTS) | Yes (for Podcast) |
 | `FISH_API_KEY` | Fish Audio API Key | Yes (for Fish Audio) |
+| `WECHAT_APPID` | WeChat Official Account AppID (for draft push) | No (or pass in request body) |
+| `WECHAT_SECRET` | WeChat Official Account AppSecret (for draft push) | No (or pass in request body) |
 
 ## Quick start (local)
 ```bash
@@ -199,8 +201,84 @@ print("Saved to output.wav")
 PY
 ```
 
+## Markdown → WeChat (公众号排版与草稿推送)
+
+Convert Markdown into WeChat-compatible inline-style HTML (18 built-in themes,
+CJK spacing fixes, dark-mode attributes, list/link/code-block handling), then
+either preview it or push it straight into the Official Account draft box.
+
+### List available themes
+- **GET** `/v1/wechat/markdown/themes`
+- Response: `{"themes": [{"name": "professional-clean", "description": "..."}, ...]}`
+
+### Preview (Markdown → HTML)
+Renders Markdown to HTML for pasting into the WeChat editor or previewing in a
+browser. No WeChat credentials needed.
+
+- **POST** `/v1/wechat/markdown/preview`
+- Body (JSON):
+
+  | Field | Type | Required | Description |
+  | :--- | :--- | :--- | :--- |
+  | `markdown` | string | Yes | Markdown source |
+  | `theme` | string | No | Theme name (default `professional-clean`) |
+  | `title` | string | No | Override the extracted H1 title |
+  | `full_page` | bool | No | Wrap body HTML in a full HTML document (browser preview only) |
+
+- Response:
+  ```json
+  {
+    "html": "<p ...>...</p>",
+    "title": "标题",
+    "digest": "自动摘要...",
+    "images": ["https://..."],
+    "theme": "professional-clean"
+  }
+  ```
+
+### Publish to draft box (Markdown → WeChat draft)
+Converts the Markdown, uploads inline images (URL / base64) and an optional
+cover to WeChat, then creates a draft. `appid`/`secret` may be passed in the
+body or supplied via `WECHAT_APPID` / `WECHAT_SECRET` env vars.
+
+- **POST** `/v1/wechat/markdown/draft`
+- Body (JSON):
+
+  | Field | Type | Required | Description |
+  | :--- | :--- | :--- | :--- |
+  | `markdown` | string | Yes | Markdown source |
+  | `appid` | string | No* | WeChat AppID (falls back to `WECHAT_APPID`) |
+  | `secret` | string | No* | WeChat AppSecret (falls back to `WECHAT_SECRET`) |
+  | `theme` | string | No | Theme name (default `professional-clean`) |
+  | `title` | string | No | Override the article title |
+  | `author` | string | No | Article author |
+  | `digest` | string | No | Override the summary (≤120 UTF-8 bytes) |
+  | `cover` | string | No | Cover image as URL / data URI / base64 (uploaded as thumbnail) |
+  | `content_source_url` | string | No | "阅读原文" link |
+
+  *At least one of the request field or the corresponding env var must be set.
+
+- Response:
+  ```json
+  {
+    "media_id": "draft-media-id",
+    "title": "标题",
+    "digest": "摘要...",
+    "theme": "professional-clean",
+    "images_uploaded": 2
+  }
+  ```
+
+Sample request:
+```bash
+curl -X POST http://localhost:8000/v1/wechat/markdown/preview \
+  -H "Content-Type: application/json" \
+  -d '{"markdown":"# 标题\n\n正文内容 with English 混排。","theme":"sspai"}'
+```
+
 ## Project files
 - `server.py`: Flask app exposing the TTS endpoint
+- `lib/wechat/`: Markdown → WeChat HTML converter, themes, and draft-box publisher (ported from wewrite)
 - `Dockerfile`: uv-based container image using Gunicorn
 - `pyproject.toml`: dependencies (managed by uv)
 - `LICENSE`: MIT

@@ -9,3 +9,5 @@ Makefile.local
 .venv/
 *.mp3
 .env
+__pycache__/
+*.pyc
