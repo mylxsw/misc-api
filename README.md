@@ -41,7 +41,21 @@ docker build -t cosyvoice-api .
 docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
 ```
 
-## API
+## API 详情
+
+### API 概览
+
+- [`POST /v1/voice/cosyvoice`](#cosyvoice-text-to-speech)：使用阿里云 DashScope CosyVoice 将文本同步转换为语音。
+- [`POST /v1/voice/podcast`](#create-podcast-task)：创建火山引擎多人对话播客生成任务。
+- [`GET /v1/voice/podcast/<task_id>`](#get-podcast-task)：查询播客生成任务的状态和结果。
+- [`POST /v1/voice/fish-audio/text-to-speech`](#create-fish-audio-task)：创建 Fish Audio 文本转语音任务。
+- [`GET /v1/voice/fish-audio/text-to-speech/<task_id>`](#get-fish-audio-task)：查询 Fish Audio 任务的状态和结果。
+- [`GET /v1/wechat/markdown/themes`](#list-wechat-themes)：获取微信公众号 Markdown 排版支持的主题。
+- [`POST /v1/wechat/markdown/preview`](#preview-wechat-article)：将 Markdown 转换为可预览或粘贴到微信编辑器的 HTML。
+- [`POST /v1/wechat/markdown/draft`](#publish-wechat-draft)：将 Markdown 文章及图片上传到微信公众号草稿箱。
+
+### CosyVoice text-to-speech
+
 - **POST** `/v1/voice/cosyvoice`
 - Body (JSON):
   ```json
@@ -59,6 +73,8 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
   ```
 
 
+
+### Create podcast task
 
 - **POST** `/v1/voice/podcast`
   > Official Documentation: [Volcano Engine Podcast TTS](https://www.volcengine.com/docs/6561/1668014?lang=zh)
@@ -98,6 +114,8 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
   }
   ```
 
+### Get podcast task
+
 - **GET** `/v1/voice/podcast/<task_id>`
 - Response:
   - Processing:
@@ -133,6 +151,8 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
   - `VOLC_ACCESS_TOKEN`
   - `REDIS_URL` (default: `redis://localhost:6379/0`)
 
+### Create Fish Audio task
+
 - **POST** `/v1/voice/fish-audio/text-to-speech`
 - Body (JSON):
   ```json
@@ -157,6 +177,8 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
       "task_id": "uuid-string"
   }
   ```
+
+### Get Fish Audio task
 
 - **GET** `/v1/voice/fish-audio/text-to-speech/<task_id>`
 - Response:
@@ -201,17 +223,17 @@ print("Saved to output.wav")
 PY
 ```
 
-## Markdown → WeChat (公众号排版与草稿推送)
+### Markdown → WeChat (公众号排版与草稿推送)
 
 Convert Markdown into WeChat-compatible inline-style HTML (18 built-in themes,
 CJK spacing fixes, dark-mode attributes, list/link/code-block handling), then
 either preview it or push it straight into the Official Account draft box.
 
-### List available themes
+#### List WeChat themes
 - **GET** `/v1/wechat/markdown/themes`
 - Response: `{"themes": [{"name": "professional-clean", "description": "..."}, ...]}`
 
-### Preview (Markdown → HTML)
+#### Preview WeChat article
 Renders Markdown to HTML for pasting into the WeChat editor or previewing in a
 browser. No WeChat credentials needed.
 
@@ -236,7 +258,7 @@ browser. No WeChat credentials needed.
   }
   ```
 
-### Publish to draft box (Markdown → WeChat draft)
+#### Publish WeChat draft
 Converts the Markdown, uploads inline images (URL / base64) and an optional
 cover to WeChat, then creates a draft. `appid`/`secret` may be passed in the
 body or supplied via `WECHAT_APPID` / `WECHAT_SECRET` env vars.
