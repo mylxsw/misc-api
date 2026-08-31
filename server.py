@@ -36,7 +36,12 @@ from lib.wechat import (
 )
 from fishaudio import FishAudio
 from fishaudio.types import TTSConfig, Prosody
-from lib.image_generation import ImageGenerationError, generate_image, get_provider
+from lib.image_generation import (
+    ImageGenerationError,
+    generate_image,
+    get_image_model_catalog,
+    get_provider,
+)
 
 # Configure DashScope when available. The key is validated on CosyVoice calls so
 # unrelated APIs can still run without TTS credentials.
@@ -407,6 +412,12 @@ def _generate_image_response(provider, model, prompt, size):
         "provider": provider,
         "model": model,
     }
+
+
+@app.route("/v1/images/models", methods=["GET"])
+def image_models_endpoint():
+    """Return the versioned catalog of supported image providers and models."""
+    return jsonify(get_image_model_catalog())
 
 
 @app.route("/v1/images/generations", methods=["POST"])

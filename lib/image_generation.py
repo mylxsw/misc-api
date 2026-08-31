@@ -377,6 +377,68 @@ class ToAPIsProvider(AsyncGatewayProvider):
         return body.get("status"), image_url, _error_message(body)
 
 
+IMAGE_MODEL_CATALOG_UPDATED_AT = "2026-08-31"
+
+IMAGE_MODEL_CATALOG = {
+    "aliyun": {
+        "models": [
+            "qwen-image-3.0-pro",
+            "qwen-image-3.0",
+            "wan2.7-image-pro",
+            "wan2.7-image",
+            "wan2.6-image",
+            "wan2.6-t2i",
+            "wan2.5-t2i-preview",
+            "z-image-turbo",
+        ],
+        "note": "Model availability depends on the Alibaba Cloud region and workspace.",
+    },
+    "ark": {
+        "models": [
+            "doubao-seedream-5-0-pro",
+            "doubao-seedream-5-0-lite",
+            "doubao-seedream-4-5",
+            "doubao-seedream-4-0-250828",
+        ],
+        "note": "Ark Endpoint IDs are also accepted and may be used instead of public Model IDs.",
+    },
+    "apimart": {
+        "models": [
+            "gpt-image-2",
+            "gpt-image-2-ext",
+            "gemini-3.1-flash-image-preview",
+            "gemini-3.1-flash-image-preview-official",
+            "nano-banana-2-ext",
+            "nano-banana-2",
+            "gemini-3-pro-image-preview",
+            "gemini-3-pro-image-preview-official",
+            "nano-banana-pro-ext",
+            "nano-banana-pro",
+        ],
+    },
+    "toapis": {
+        "models": [
+            "gpt-image-2",
+            "gemini-3.1-flash-image-preview",
+            "gemini-3-pro-image-preview",
+            "nano-banana-pro",
+        ],
+    },
+    "gemini": {
+        "models": [
+            "gemini-3.1-flash-image-preview",
+            "gemini-3-pro-image-preview",
+        ],
+        "note": "Google model availability depends on the API key and region.",
+    },
+    "xai": {
+        "models": [
+            "grok-imagine-image",
+        ],
+    },
+}
+
+
 PROVIDER_CONFIG = {
     "aliyun": (AliyunProvider, "DASHSCOPE_API_KEY", "ALIYUN_API_BASE", "https://dashscope.aliyuncs.com/api/v1"),
     "ark": (ArkProvider, "ARK_API_KEY", "ARK_API_BASE", "https://ark.cn-beijing.volces.com/api/v3"),
@@ -385,6 +447,23 @@ PROVIDER_CONFIG = {
     "gemini": (GeminiProvider, "GEMINI_API_KEY", "GEMINI_API_BASE", "https://generativelanguage.googleapis.com"),
     "xai": (XAIProvider, "X_AI_API_KEY", "X_AI_API_BASE", "https://api.x.ai/v1"),
 }
+
+
+def get_image_model_catalog() -> dict[str, Any]:
+    providers = []
+    for provider_id in PROVIDER_CONFIG:
+        catalog = IMAGE_MODEL_CATALOG.get(provider_id, {"models": []})
+        item = {
+            "provider": provider_id,
+            "models": list(catalog.get("models", [])),
+        }
+        if catalog.get("note"):
+            item["note"] = catalog["note"]
+        providers.append(item)
+    return {
+        "updated_at": IMAGE_MODEL_CATALOG_UPDATED_AT,
+        "providers": providers,
+    }
 
 
 def get_provider(name: str) -> ImageProvider:

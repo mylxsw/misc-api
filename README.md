@@ -59,6 +59,7 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
 
 ### API 概览
 
+- [`GET /v1/images/models`](#list-image-providers-and-models)：获取支持的图片 provider 与模型目录。
 - [`POST /v1/images/generations`](#generate-image-synchronously)：通过指定 provider 和 model 同步生成一张图片。
 - [`POST /v1/images/generations/async`](#create-image-generation-task)：创建统一图片生成异步任务。
 - [`GET /v1/images/generations/async/<task_id>`](#get-image-generation-task)：查询图片生成任务状态和 Base64 结果。
@@ -70,6 +71,29 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
 - [`GET /v1/wechat/markdown/themes`](#list-wechat-themes)：获取微信公众号 Markdown 排版支持的主题。
 - [`POST /v1/wechat/markdown/preview`](#preview-wechat-article)：将 Markdown 转换为可预览或粘贴到微信编辑器的 HTML。
 - [`POST /v1/wechat/markdown/draft`](#publish-wechat-draft)：将 Markdown 文章及图片上传到微信公众号草稿箱。
+
+### List image providers and models
+
+- **GET** `/v1/images/models`
+- Returns the built-in image provider/model catalog. `updated_at` identifies the
+  catalog snapshot date; the current data is updated through `2026-08-31`.
+- Response:
+  ```json
+  {
+    "updated_at": "2026-08-31",
+    "providers": [
+      {
+        "provider": "apimart",
+        "models": ["gpt-image-2", "gemini-3.1-flash-image-preview"]
+      },
+      {
+        "provider": "ark",
+        "models": ["doubao-seedream-5-0-pro", "doubao-seedream-4-0-250828"],
+        "note": "Ark Endpoint IDs are also accepted and may be used instead of public Model IDs."
+      }
+    ]
+  }
+  ```
 
 ### Generate image synchronously
 

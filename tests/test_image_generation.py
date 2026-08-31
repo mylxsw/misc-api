@@ -11,6 +11,7 @@ from lib.image_generation import (
     ImageGenerationError,
     ToAPIsProvider,
     XAIProvider,
+    get_image_model_catalog,
     get_provider,
 )
 
@@ -137,6 +138,18 @@ class ImageProviderTests(unittest.TestCase):
         submit = provider._request_json.call_args_list[0]
         self.assertEqual(submit.kwargs["json"]["resolution"], "4K")
         self.assertEqual(submit.kwargs["json"]["size"], "auto")
+
+    def test_model_catalog_covers_every_provider(self):
+        catalog = get_image_model_catalog()
+        self.assertEqual(catalog["updated_at"], "2026-08-31")
+        providers = {item["provider"]: item for item in catalog["providers"]}
+        self.assertEqual(
+            set(providers),
+            {"aliyun", "ark", "apimart", "toapis", "gemini", "xai"},
+        )
+        self.assertIn("qwen-image-3.0-pro", providers["aliyun"]["models"])
+        self.assertIn("gpt-image-2", providers["apimart"]["models"])
+        self.assertIn("grok-imagine-image", providers["xai"]["models"])
 
     def test_unknown_provider_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "unsupported provider"):
