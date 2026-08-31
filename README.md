@@ -36,6 +36,13 @@ The following environment variables are required to run the service:
 | `X_AI_API_BASE` | xAI API base URL | No |
 | `IMAGE_GENERATION_MAX_WAIT` | Maximum provider wait time in seconds (default `300`) | No |
 | `IMAGE_GENERATION_POLL_INTERVAL` | APIMart/ToAPIs/Alibaba Cloud polling interval in seconds (default `5`) | No |
+| `R2_ENDPOINT` | Cloudflare R2 S3 endpoint | Yes (when `return_url=true`) |
+| `R2_BUCKET` | R2 bucket name | Yes (when `return_url=true`) |
+| `R2_ACCESS_KEY_ID` | R2 access key ID | Yes (when `return_url=true`) |
+| `R2_SECRET_ACCESS_KEY` | R2 secret access key | Yes (when `return_url=true`) |
+| `R2_CDN_URL` | Public CDN base URL used to build the returned image URL | Yes (when `return_url=true`) |
+| `R2_REGION` | S3 signing region (default `auto`) | No |
+| `R2_KEY_PREFIX` | Optional object key prefix | No |
 | `WECHAT_APPID` | WeChat Official Account AppID (for draft push) | No (or pass in request body) |
 | `WECHAT_SECRET` | WeChat Official Account AppSecret (for draft push) | No (or pass in request body) |
 
@@ -106,13 +113,15 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
   | `model` | string | Yes | Provider-specific model identifier |
   | `prompt` | string | Yes | Image description |
   | `size` | string | No | Resolution (`1K`, `2K`, `4K`) or aspect ratio (`1:1`, `16:9`, etc.) |
+  | `return_url` | boolean | No | Upload to configured S3/R2 storage and return `image_url` instead of Base64 (default `false`) |
 
   ```json
   {
     "provider": "apimart",
     "model": "gpt-image-2",
     "prompt": "一只橘猫坐在窗台上看夕阳，水彩画风格",
-    "size": "16:9"
+    "size": "16:9",
+    "return_url": false
   }
   ```
 
@@ -122,7 +131,7 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
   image, and returns the same response format for every provider. Ark requests
   `b64_json` directly from Seedream and therefore does not need a result download.
 
-- Response:
+- Base64 response (`return_url=false`):
   ```json
   {
     "image_base64": "<base64 image>",
@@ -130,6 +139,19 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
     "model": "gpt-image-2"
   }
   ```
+- URL response (`return_url=true`):
+  ```json
+  {
+    "image_url": "https://cdn.example/misc-resources/2026/08/31/<uuid>.png",
+    "provider": "apimart",
+    "model": "gpt-image-2"
+  }
+  ```
+
+  Uploaded object keys use UTC time and the format
+  `<R2_KEY_PREFIX>/YYYY/MM/DD/<uuid>.<detected-extension>`. The generated image
+  is validated before upload, its MIME type is preserved, and the returned URL
+  is built from `R2_CDN_URL`.
 
 #### Supported providers and models
 
@@ -192,8 +214,9 @@ selected Seedream model) and explicit dimensions are passed through.
     "task_id": "uuid-string"
   }
   ```
-- Success response contains `status: "success"` and `image_base64`; failure
-  contains `status: "failed"` and `error`. Results are stored in Redis for 7 days.
+- Success response contains `status: "success"` and either `image_base64` or
+  `image_url`, according to `return_url`; failure contains `status: "failed"`
+  and `error`. Results are stored in Redis for 7 days.
 
 ### CosyVoice text-to-speech
 

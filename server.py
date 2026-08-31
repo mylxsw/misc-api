@@ -42,6 +42,7 @@ from lib.image_generation import (
     get_image_model_catalog,
     get_provider,
 )
+from lib.object_storage import ObjectStorageError, S3ImageStorage
 
 # Configure DashScope when available. The key is validated on CosyVoice calls so
 # unrelated APIs can still run without TTS credentials.
@@ -393,6 +394,7 @@ def _parse_image_generation_payload(payload):
     model = (payload.get("model") or "").strip()
     prompt = (payload.get("prompt") or "").strip()
     size = payload.get("size")
+    return_url = payload.get("return_url", False)
 
     if not provider:
         raise ValueError("parameter 'provider' is required")
@@ -402,16 +404,24 @@ def _parse_image_generation_payload(payload):
         raise ValueError("parameter 'prompt' is required")
     if size is not None and (not isinstance(size, str) or not size.strip()):
         raise ValueError("parameter 'size' must be a non-empty string")
-    return provider, model, prompt, size.strip() if size else None
+    if not isinstance(return_url, bool):
+        raise ValueError("parameter 'return_url' must be a boolean")
+    return provider, model, prompt, size.strip() if size else None, return_url
 
 
-def _generate_image_response(provider, model, prompt, size):
+def _generate_image_response(provider, model, prompt, size, return_url):
+    # Validate storage before generating a billable image.
+    storage = S3ImageStorage.from_env() if return_url else None
     image = generate_image(provider=provider, model=model, prompt=prompt, size=size)
-    return {
-        "image_base64": base64.b64encode(image).decode("ascii"),
+    result = {
         "provider": provider,
         "model": model,
     }
+    if storage:
+        result["image_url"] = storage.upload_image(image)
+    else:
+        result["image_base64"] = base64.b64encode(image).decode("ascii")
+    return result
 
 
 @app.route("/v1/images/models", methods=["GET"])
@@ -428,17 +438,17 @@ def image_generation_endpoint():
         return jsonify(_generate_image_response(*params))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
-    except ImageGenerationError as exc:
+    except (ImageGenerationError, ObjectStorageError) as exc:
         return jsonify({"error": str(exc)}), 502
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
 
-def process_image_generation_task(task_id, provider, model, prompt, size):
+def process_image_generation_task(task_id, provider, model, prompt, size, return_url):
     try:
         task_info = {
             "status": "success",
-            **_generate_image_response(provider, model, prompt, size),
+            **_generate_image_response(provider, model, prompt, size, return_url),
             "created_at": time.time(),
             "task_id": task_id,
         }
@@ -458,14 +468,16 @@ def process_image_generation_task(task_id, provider, model, prompt, size):
 def async_image_generation_endpoint():
     """Create a local image generation task and return immediately."""
     try:
-        provider, model, prompt, size = _parse_image_generation_payload(
+        provider, model, prompt, size, return_url = _parse_image_generation_payload(
             request.get_json(silent=True) or {}
         )
-        # Validate provider configuration before accepting a background task.
+        # Validate provider and storage configuration before accepting a task.
         get_provider(provider)
+        if return_url:
+            S3ImageStorage.from_env()
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
-    except ImageGenerationError as exc:
+    except (ImageGenerationError, ObjectStorageError) as exc:
         return jsonify({"error": str(exc)}), 500
 
     task_id = str(uuid.uuid4())
@@ -473,13 +485,14 @@ def async_image_generation_endpoint():
         "status": "processing",
         "provider": provider,
         "model": model,
+        "return_url": return_url,
         "created_at": time.time(),
         "task_id": task_id,
     }
     redis_client.setex(f"{IMAGE_TASK_PREFIX}{task_id}", REDIS_TTL, json.dumps(task_info))
     thread = threading.Thread(
         target=process_image_generation_task,
-        args=(task_id, provider, model, prompt, size),
+        args=(task_id, provider, model, prompt, size, return_url),
         daemon=True,
     )
     thread.start()

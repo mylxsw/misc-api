@@ -17,4 +17,5 @@ dependencies = [
     "cssutils",
     "pyyaml",
     "pygments",
+    "boto3>=1.43.83",
 ]
