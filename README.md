@@ -4,6 +4,7 @@ A Flask-based HTTP API service that integrates multiple AI media generation capa
 - **Alibaba Cloud DashScope CosyVoice TTS**: High-quality text-to-speech synthesis.
 - **Volcano Engine Podcast TTS** ([Official Docs](https://www.volcengine.com/docs/6561/1668014?lang=zh)): Multi-speaker, conversational podcast generation with music support.
 - **Fish Audio TTS**: Text-to-speech synthesis using Fish Audio SDK.
+- **Unified Image Generation**: Synchronous and asynchronous image generation through APIMart, ToAPIs, Google Gemini, or xAI.
 - **Image Stitching**: Utility to stitch multiple images vertically or horizontally.
 
 This service exposes these capabilities via simple RESTful endpoints, returning base64-encoded results.
@@ -18,10 +19,23 @@ The following environment variables are required to run the service:
 
 | Variable | Description | Required | 
 | :--- | :--- | :--- |
-| `DASHSCOPE_API_KEY` | Alibaba Cloud DashScope API Key (for CosyVoice) | Yes |
+| `DASHSCOPE_API_KEY` | Alibaba Cloud DashScope API Key (for CosyVoice and `aliyun` image generation) | Yes (for Alibaba Cloud APIs) |
+| `ALIYUN_API_BASE` | Alibaba Cloud Model Studio API base; use the base for the same region/workspace as the API Key (default `https://dashscope.aliyuncs.com/api/v1`) | No |
 | `VOLC_APPID` | Volcano Engine App ID (for Podcast TTS) | Yes (for Podcast) |
 | `VOLC_ACCESS_TOKEN` | Volcano Engine Access Token (for Podcast TTS) | Yes (for Podcast) |
 | `FISH_API_KEY` | Fish Audio API Key | Yes (for Fish Audio) |
+| `ARK_API_KEY` | Volcano Engine Ark API Key | Yes (for Ark image generation) |
+| `ARK_API_BASE` | Ark API base URL (default `https://ark.cn-beijing.volces.com/api/v3`) | No |
+| `APIMART_API_KEY` | APIMart API Key | Yes (for APIMart image generation) |
+| `APIMART_API_BASE` | APIMart API base URL (default `https://api.apimart.ai/v1`) | No |
+| `TOAPIS_API_KEY` | ToAPIs API Key | Yes (for ToAPIs image generation) |
+| `TOAPIS_API_BASE` | ToAPIs API base URL (default `https://toapis.com/v1`) | No |
+| `GEMINI_API_KEY` | Google Gemini API Key | Yes (for Gemini image generation) |
+| `GEMINI_API_BASE` | Gemini API base URL | No |
+| `X_AI_API_KEY` | xAI API Key | Yes (for xAI image generation) |
+| `X_AI_API_BASE` | xAI API base URL | No |
+| `IMAGE_GENERATION_MAX_WAIT` | Maximum provider wait time in seconds (default `300`) | No |
+| `IMAGE_GENERATION_POLL_INTERVAL` | APIMart/ToAPIs/Alibaba Cloud polling interval in seconds (default `5`) | No |
 | `WECHAT_APPID` | WeChat Official Account AppID (for draft push) | No (or pass in request body) |
 | `WECHAT_SECRET` | WeChat Official Account AppSecret (for draft push) | No (or pass in request body) |
 
@@ -45,6 +59,9 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
 
 ### API 概览
 
+- [`POST /v1/images/generations`](#generate-image-synchronously)：通过指定 provider 和 model 同步生成一张图片。
+- [`POST /v1/images/generations/async`](#create-image-generation-task)：创建统一图片生成异步任务。
+- [`GET /v1/images/generations/async/<task_id>`](#get-image-generation-task)：查询图片生成任务状态和 Base64 结果。
 - [`POST /v1/voice/cosyvoice`](#cosyvoice-text-to-speech)：使用阿里云 DashScope CosyVoice 将文本同步转换为语音。
 - [`POST /v1/voice/podcast`](#create-podcast-task)：创建火山引擎多人对话播客生成任务。
 - [`GET /v1/voice/podcast/<task_id>`](#get-podcast-task)：查询播客生成任务的状态和结果。
@@ -53,6 +70,106 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
 - [`GET /v1/wechat/markdown/themes`](#list-wechat-themes)：获取微信公众号 Markdown 排版支持的主题。
 - [`POST /v1/wechat/markdown/preview`](#preview-wechat-article)：将 Markdown 转换为可预览或粘贴到微信编辑器的 HTML。
 - [`POST /v1/wechat/markdown/draft`](#publish-wechat-draft)：将 Markdown 文章及图片上传到微信公众号草稿箱。
+
+### Generate image synchronously
+
+- **POST** `/v1/images/generations`
+- Body (JSON):
+
+  | Field | Type | Required | Description |
+  | :--- | :--- | :--- | :--- |
+  | `provider` | string | Yes | `aliyun`, `ark`, `apimart`, `toapis`, `gemini`, or `xai` |
+  | `model` | string | Yes | Provider-specific model identifier |
+  | `prompt` | string | Yes | Image description |
+  | `size` | string | No | Resolution (`1K`, `2K`, `4K`) or aspect ratio (`1:1`, `16:9`, etc.) |
+
+  ```json
+  {
+    "provider": "apimart",
+    "model": "gpt-image-2",
+    "prompt": "一只橘猫坐在窗台上看夕阳，水彩画风格",
+    "size": "16:9"
+  }
+  ```
+
+  APIMart and ToAPIs are asynchronous upstream services. Alibaba Cloud Wan
+  models are asynchronous, while Qwen Image and Z-Image are synchronous. This
+  endpoint hides these differences, waits when necessary, downloads the final
+  image, and returns the same response format for every provider. Ark requests
+  `b64_json` directly from Seedream and therefore does not need a result download.
+
+- Response:
+  ```json
+  {
+    "image_base64": "<base64 image>",
+    "provider": "apimart",
+    "model": "gpt-image-2"
+  }
+  ```
+
+#### Supported providers and models
+
+The router accepts provider-specific model identifiers, making it possible to
+add models without changing the public request format. The initially supported
+and documented combinations are:
+
+| Provider | Models |
+| :--- | :--- |
+| `aliyun` | `qwen-image-3.0-pro`, `qwen-image-3.0`, `wan2.7-image-pro`, other `wan*` image models, and `z-image-turbo` |
+| `ark` | Ark Model IDs or Endpoint IDs for Doubao Seedream 5.0 Pro/Lite, Seedream 4.5, and Seedream 4.0 |
+| `apimart` | `gpt-image-2`, `gemini-3.1-flash-image-preview`, `gemini-3-pro-image-preview` and their APIMart aliases |
+| `toapis` | `gpt-image-2`, `gemini-3.1-flash-image-preview`, `gemini-3-pro-image-preview` |
+| `gemini` | Google image-capable Gemini model identifiers, such as `gemini-3-pro-image-preview` |
+| `xai` | xAI image model identifiers, such as `grok-imagine-image` |
+
+For Alibaba Cloud, set `ALIYUN_API_BASE` to a base URL in the same region and
+workspace as `DASHSCOPE_API_KEY`. For example:
+
+```bash
+# Beijing workspace
+ALIYUN_API_BASE=https://<WorkspaceId>.cn-beijing.maas.aliyuncs.com/api/v1
+
+# Singapore workspace
+ALIYUN_API_BASE=https://<WorkspaceId>.ap-southeast-1.maas.aliyuncs.com/api/v1
+```
+
+Alibaba Cloud APIs require pixel dimensions rather than a bare aspect ratio.
+The adapter maps common ratios to documented recommended dimensions—for
+example, `16:9` becomes `1280*720` for Qwen/Z-Image and `2688*1536` for Wan.
+Explicit dimensions such as `1024*1536` are passed through unchanged.
+
+For Volcano Engine Ark, configure `ARK_API_KEY`. The `model` request field must
+be a Model ID or Endpoint ID enabled in the Ark console. Common aspect ratios
+are mapped to compatible 2K pixel sizes—for example, `16:9` becomes
+`2848x1600`. Resolution tiers (`1K`, `1.5K`, `2K`, `3K`, or `4K`, subject to the
+selected Seedream model) and explicit dimensions are passed through.
+
+### Create image generation task
+
+- **POST** `/v1/images/generations/async`
+- Body: same as the synchronous endpoint.
+- Response (`202 Accepted`):
+  ```json
+  {
+    "task_id": "uuid-string"
+  }
+  ```
+
+### Get image generation task
+
+- **GET** `/v1/images/generations/async/<task_id>`
+- Processing response:
+  ```json
+  {
+    "status": "processing",
+    "provider": "toapis",
+    "model": "gemini-3.1-flash-image-preview",
+    "created_at": 1700000000.0,
+    "task_id": "uuid-string"
+  }
+  ```
+- Success response contains `status: "success"` and `image_base64`; failure
+  contains `status: "failed"` and `error`. Results are stored in Redis for 7 days.
 
 ### CosyVoice text-to-speech
 

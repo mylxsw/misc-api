@@ -36,13 +36,13 @@ from lib.wechat import (
 )
 from fishaudio import FishAudio
 from fishaudio.types import TTSConfig, Prosody
+from lib.image_generation import ImageGenerationError, generate_image, get_provider
 
-# Resolve and validate the dashscope API key early so we can return a clearer error
-# instead of a TypeError from the SDK when it tries to concat None.
+# Configure DashScope when available. The key is validated on CosyVoice calls so
+# unrelated APIs can still run without TTS credentials.
 _resolved_api_key = os.getenv("DASHSCOPE_API_KEY") or dashscope.api_key
-if not _resolved_api_key:
-    raise RuntimeError("DASHSCOPE_API_KEY is not set; please export it for the service to start.")
-dashscope.api_key = _resolved_api_key
+if _resolved_api_key:
+    dashscope.api_key = _resolved_api_key
 
 app = Flask(__name__)
 
@@ -59,6 +59,8 @@ REDIS_TTL = 7 * 24 * 3600  # 7 days
 
 def synthesize(text: str, voice: str, model: str = DEFAULT_MODEL, **kwargs) -> Tuple[bytes, str, int]:
     """Run CosyVoice TTS and return audio bytes plus request metadata."""
+    if not _resolved_api_key:
+        raise RuntimeError("DASHSCOPE_API_KEY is not set")
     synthesizer = SpeechSynthesizer(model=model, voice=voice, **kwargs)
     audio = synthesizer.call(text)
     return audio, synthesizer.get_last_request_id(), synthesizer.get_first_package_delay()
@@ -375,6 +377,109 @@ def query_fish_audio_task(task_id):
     if not data:
         return jsonify({"error": "Task not found"}), 404
         
+    return jsonify(json.loads(data))
+
+
+IMAGE_TASK_PREFIX = "image_generation_task:"
+
+
+def _parse_image_generation_payload(payload):
+    provider = (payload.get("provider") or "").strip().lower()
+    model = (payload.get("model") or "").strip()
+    prompt = (payload.get("prompt") or "").strip()
+    size = payload.get("size")
+
+    if not provider:
+        raise ValueError("parameter 'provider' is required")
+    if not model:
+        raise ValueError("parameter 'model' is required")
+    if not prompt:
+        raise ValueError("parameter 'prompt' is required")
+    if size is not None and (not isinstance(size, str) or not size.strip()):
+        raise ValueError("parameter 'size' must be a non-empty string")
+    return provider, model, prompt, size.strip() if size else None
+
+
+def _generate_image_response(provider, model, prompt, size):
+    image = generate_image(provider=provider, model=model, prompt=prompt, size=size)
+    return {
+        "image_base64": base64.b64encode(image).decode("ascii"),
+        "provider": provider,
+        "model": model,
+    }
+
+
+@app.route("/v1/images/generations", methods=["POST"])
+def image_generation_endpoint():
+    """Generate one image and wait for the provider to return the final result."""
+    try:
+        params = _parse_image_generation_payload(request.get_json(silent=True) or {})
+        return jsonify(_generate_image_response(*params))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except ImageGenerationError as exc:
+        return jsonify({"error": str(exc)}), 502
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+def process_image_generation_task(task_id, provider, model, prompt, size):
+    try:
+        task_info = {
+            "status": "success",
+            **_generate_image_response(provider, model, prompt, size),
+            "created_at": time.time(),
+            "task_id": task_id,
+        }
+    except Exception as exc:
+        task_info = {
+            "status": "failed",
+            "error": str(exc),
+            "provider": provider,
+            "model": model,
+            "created_at": time.time(),
+            "task_id": task_id,
+        }
+    redis_client.setex(f"{IMAGE_TASK_PREFIX}{task_id}", REDIS_TTL, json.dumps(task_info))
+
+
+@app.route("/v1/images/generations/async", methods=["POST"])
+def async_image_generation_endpoint():
+    """Create a local image generation task and return immediately."""
+    try:
+        provider, model, prompt, size = _parse_image_generation_payload(
+            request.get_json(silent=True) or {}
+        )
+        # Validate provider configuration before accepting a background task.
+        get_provider(provider)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except ImageGenerationError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    task_id = str(uuid.uuid4())
+    task_info = {
+        "status": "processing",
+        "provider": provider,
+        "model": model,
+        "created_at": time.time(),
+        "task_id": task_id,
+    }
+    redis_client.setex(f"{IMAGE_TASK_PREFIX}{task_id}", REDIS_TTL, json.dumps(task_info))
+    thread = threading.Thread(
+        target=process_image_generation_task,
+        args=(task_id, provider, model, prompt, size),
+        daemon=True,
+    )
+    thread.start()
+    return jsonify({"task_id": task_id}), 202
+
+
+@app.route("/v1/images/generations/async/<task_id>", methods=["GET"])
+def query_image_generation_task(task_id):
+    data = redis_client.get(f"{IMAGE_TASK_PREFIX}{task_id}")
+    if not data:
+        return jsonify({"error": "Task not found"}), 404
     return jsonify(json.loads(data))
 
 

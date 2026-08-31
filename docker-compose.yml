@@ -4,10 +4,26 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
-      - VOLC_APPID=${VOLC_APPID}
-      - VOLC_ACCESS_TOKEN=${VOLC_ACCESS_TOKEN}
-      - REDIS_URL=redis://redis:6379/0
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
+      ALIYUN_API_BASE: ${ALIYUN_API_BASE:-https://dashscope.aliyuncs.com/api/v1}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_API_BASE: ${GEMINI_API_BASE:-https://generativelanguage.googleapis.com}
+      X_AI_API_KEY: ${X_AI_API_KEY}
+      X_AI_API_BASE: ${X_AI_API_BASE:-https://api.x.ai/v1}
+      ARK_API_KEY: ${ARK_API_KEY}
+      ARK_API_BASE: ${ARK_API_BASE:-https://ark.cn-beijing.volces.com/api/v3}
+      APIMART_API_KEY: ${APIMART_API_KEY}
+      APIMART_API_BASE: ${APIMART_API_BASE:-https://api.apimart.ai/v1}
+      TOAPIS_API_KEY: ${TOAPIS_API_KEY}
+      TOAPIS_API_BASE: ${TOAPIS_API_BASE:-https://toapis.xyz/v1}
+      IMAGE_GENERATION_MAX_WAIT: ${IMAGE_GENERATION_MAX_WAIT:-300}
+      IMAGE_GENERATION_POLL_INTERVAL: ${IMAGE_GENERATION_POLL_INTERVAL:-5}
+      VOLC_APPID: ${VOLC_APPID:-}
+      VOLC_ACCESS_TOKEN: ${VOLC_ACCESS_TOKEN:-}
+      FISH_API_KEY: ${FISH_API_KEY:-}
+      WECHAT_APPID: ${WECHAT_APPID:-}
+      WECHAT_SECRET: ${WECHAT_SECRET:-}
+      REDIS_URL: redis://redis:6379/0
     restart: unless-stopped
     depends_on:
       - redis
