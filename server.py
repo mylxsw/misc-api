@@ -45,6 +45,7 @@ from lib.image_generation import (
     normalize_input_images,
 )
 from lib.object_storage import ObjectStorageError, S3ImageStorage
+from lib.image_generation_history import save_image_history_async
 
 # Configure DashScope when available. The key is validated on CosyVoice calls so
 # unrelated APIs can still run without TTS credentials.
@@ -455,6 +456,7 @@ def _generate_image_response(
     return_url,
     aspect_ratio=None,
     resolution=None,
+    generation_id=None,
 ):
     # Validate storage before generating a billable image.
     storage = S3ImageStorage.from_env() if return_url else None
@@ -475,6 +477,14 @@ def _generate_image_response(
         result["image_url"] = storage.upload_image(image)
     else:
         result["image_base64"] = base64.b64encode(image).decode("ascii")
+    save_image_history_async(
+        generation_id=generation_id or str(uuid.uuid4()),
+        image=image,
+        provider=provider,
+        model=model,
+        prompt=prompt,
+        size=resolution or aspect_ratio or size,
+    )
     return result
 
 
@@ -532,6 +542,7 @@ def process_image_generation_task(
                 return_url,
                 aspect_ratio,
                 resolution,
+                task_id,
             ),
             "created_at": time.time(),
             "task_id": task_id,

@@ -36,6 +36,8 @@ The following environment variables are required to run the service:
 | `X_AI_API_BASE` | xAI API base URL | No |
 | `IMAGE_GENERATION_MAX_WAIT` | Maximum provider wait time in seconds (default `300`) | No |
 | `IMAGE_GENERATION_POLL_INTERVAL` | APIMart/ToAPIs/Alibaba Cloud polling interval in seconds (default `5`) | No |
+| `IMAGE_HISTORY_API_BASE_URL` | Image-generation history API base URL; history persistence is disabled when unset | No |
+| `IMAGE_HISTORY_API_KEY` | Bearer API key for the image-generation history API | Yes (when `IMAGE_HISTORY_API_BASE_URL` is set) |
 | `MAX_REQUEST_BYTES` | Maximum HTTP request body size in bytes (default `89128960`, 85 MiB) | No |
 | `R2_ENDPOINT` | Cloudflare R2 S3 endpoint | Yes (when `return_url=true`) |
 | `R2_BUCKET` | R2 bucket name | Yes (when `return_url=true`) |
