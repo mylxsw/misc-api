@@ -10,11 +10,15 @@ import random
 import socket
 import time
 from abc import ABC, abstractmethod
+from io import BytesIO
 from typing import Any
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse, urlunsplit
 
 import requests
+import urllib3
+from PIL import Image, UnidentifiedImageError
 from requests.adapters import HTTPAdapter
+from urllib3 import HTTPConnectionPool, HTTPSConnectionPool
 from urllib3.util.retry import Retry
 
 
@@ -23,9 +27,9 @@ DEFAULT_MAX_WAIT = 300
 DEFAULT_POLL_INTERVAL = 5.0
 MAX_IMAGE_BYTES = 32 * 1024 * 1024
 MAX_INPUT_IMAGE_BYTES = 20 * 1024 * 1024
-MAX_INPUT_IMAGE_BASE64_CHARS = ((MAX_INPUT_IMAGE_BYTES + 2) // 3) * 4
 MAX_INPUT_IMAGES = 3
 MAX_IMAGE_REDIRECTS = 3
+COMMON_INPUT_IMAGE_MIME_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
 
 
 class ImageGenerationError(RuntimeError):
@@ -77,21 +81,21 @@ class ImageProvider(ABC):
 
     def _download_image(self, url: str) -> bytes:
         try:
-            response = self.session.get(url, timeout=DEFAULT_TIMEOUT, stream=True)
-            response.raise_for_status()
-            content_length = int(response.headers.get("Content-Length", "0") or 0)
-            if content_length > MAX_IMAGE_BYTES:
-                raise ImageGenerationError(f"{self.name} image exceeds the 32 MB limit")
-
-            chunks = []
-            total = 0
-            for chunk in response.iter_content(64 * 1024):
-                if not chunk:
-                    continue
-                total += len(chunk)
-                if total > MAX_IMAGE_BYTES:
+            with self.session.get(url, timeout=DEFAULT_TIMEOUT, stream=True) as response:
+                response.raise_for_status()
+                content_length = _content_length(response.headers, self.name)
+                if content_length > MAX_IMAGE_BYTES:
                     raise ImageGenerationError(f"{self.name} image exceeds the 32 MB limit")
-                chunks.append(chunk)
+
+                chunks = []
+                total = 0
+                for chunk in response.iter_content(64 * 1024):
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > MAX_IMAGE_BYTES:
+                        raise ImageGenerationError(f"{self.name} image exceeds the 32 MB limit")
+                    chunks.append(chunk)
         except requests.RequestException as exc:
             raise ImageGenerationError(f"failed to download {self.name} image: {exc}") from exc
 
@@ -101,7 +105,7 @@ class ImageProvider(ABC):
         return image
 
     def _inline_image(self, source: str) -> dict[str, Any]:
-        data, mime_type = _load_input_image(self.session, source, self.name)
+        data, mime_type = _load_input_image(source, self.name)
         return {
             "inline_data": {
                 "mime_type": mime_type,
@@ -124,7 +128,7 @@ class GeminiProvider(ImageProvider):
         generation_config: dict[str, Any] = {"responseModalities": ["TEXT", "IMAGE"]}
         image_config = _gemini_size(size)
         if image_config:
-            generation_config["imageConfig"] = image_config
+            generation_config["responseFormat"] = {"image": image_config}
 
         instruction = (
             f"Edit or generate an image using the provided reference image(s): {prompt}"
@@ -135,8 +139,8 @@ class GeminiProvider(ImageProvider):
 
         body = self._request_json(
             "POST",
-            f"{self.api_base}/v1beta/models/{quote(model, safe='')}:generateContent",
-            params={"key": self.api_key},
+            f"{self.api_base}/v1/models/{quote(model, safe='')}:generateContent",
+            headers={"x-goog-api-key": self.api_key},
             json={
                 "contents": [{"parts": parts}],
                 "generationConfig": generation_config,
@@ -528,10 +532,12 @@ IMAGE_MODEL_CATALOG = {
     },
     "gemini": {
         "models": [
+            "gemini-3.1-flash-image",
+            "gemini-3-pro-image",
             "gemini-3.1-flash-image-preview",
             "gemini-3-pro-image-preview",
         ],
-        "note": "Google model availability depends on the API key and region.",
+        "note": "Preview IDs are retained as legacy aliases; availability depends on the API key and region.",
     },
     "xai": {
         "models": [
@@ -587,12 +593,23 @@ def generate_image(
     size: str | None = None,
     images: list[str] | None = None,
 ) -> bytes:
-    normalized_images = normalize_input_images(images)
+    normalized_images = normalize_input_images(images, provider=provider, model=model)
+    return generate_normalized_image(provider, model, prompt, size, normalized_images)
+
+
+def generate_normalized_image(
+    provider: str,
+    model: str,
+    prompt: str,
+    size: str | None,
+    images: list[str],
+) -> bytes:
+    """Generate using image references already validated at the HTTP boundary."""
     return get_provider(provider).generate(
         model=model,
         prompt=prompt,
         size=size,
-        images=normalized_images,
+        images=images,
     )
 
 
@@ -623,7 +640,11 @@ def _apply_size(payload: dict[str, Any], size: str | None, ratio_field: str) -> 
         payload[ratio_field] = size
 
 
-def normalize_input_images(images: list[str] | None) -> list[str]:
+def normalize_input_images(
+    images: list[str] | None,
+    provider: str | None = None,
+    model: str | None = None,
+) -> list[str]:
     """Validate and canonicalize unified input image references.
 
     Public HTTP(S) URLs are preserved. Base64 data URIs and bare Base64 are
@@ -641,6 +662,9 @@ def normalize_input_images(images: list[str] | None) -> list[str]:
             f"at most {MAX_INPUT_IMAGES} input images are supported"
         )
 
+    max_bytes = _input_image_limit(provider, model)
+    max_base64_chars = ((max_bytes + 2) // 3) * 4
+    max_mb = max_bytes // (1024 * 1024)
     normalized = []
     for index, source in enumerate(images, start=1):
         if not isinstance(source, str) or not source.strip():
@@ -649,6 +673,7 @@ def normalize_input_images(images: list[str] | None) -> list[str]:
         if _is_http_url(source):
             if len(source) > 8192:
                 raise ImageGenerationError(f"input image {index} URL is too long")
+            _resolve_public_image_addresses(source, provider or "image")
             normalized.append(source)
             continue
 
@@ -659,8 +684,8 @@ def normalize_input_images(images: list[str] | None) -> list[str]:
                 raise ImageGenerationError(
                     f"input image {index} must use a base64 data URI"
                 )
-        if len(encoded) > MAX_INPUT_IMAGE_BASE64_CHARS:
-            raise ImageGenerationError(f"input image {index} exceeds the 20 MB limit")
+        if len(encoded) > max_base64_chars:
+            raise ImageGenerationError(f"input image {index} exceeds the {max_mb} MB limit")
         try:
             data = base64.b64decode(encoded, validate=True)
         except (binascii.Error, ValueError) as exc:
@@ -668,10 +693,11 @@ def normalize_input_images(images: list[str] | None) -> list[str]:
                 f"input image {index} is not a valid URL or base64 image"
             ) from exc
         mime_type = _input_image_mime_type(data)
-        if not mime_type:
+        if mime_type not in COMMON_INPUT_IMAGE_MIME_TYPES:
             raise ImageGenerationError(f"input image {index} has an unsupported format")
-        if len(data) > MAX_INPUT_IMAGE_BYTES:
-            raise ImageGenerationError(f"input image {index} exceeds the 20 MB limit")
+        if len(data) > max_bytes:
+            raise ImageGenerationError(f"input image {index} exceeds the {max_mb} MB limit")
+        _verify_input_image(data, index=index)
         normalized.append(
             f"data:{mime_type};base64,{base64.b64encode(data).decode('ascii')}"
         )
@@ -699,7 +725,46 @@ def _input_image_mime_type(data: bytes) -> str | None:
     return None
 
 
-def _validate_public_image_url(url: str, provider: str) -> None:
+def _input_image_limit(provider: str | None, model: str | None) -> int:
+    if provider == "toapis":
+        return 10 * 1024 * 1024
+    if provider == "aliyun" and (
+        (model or "").startswith("qwen-image")
+        or (model or "").startswith("wan2.6")
+    ):
+        return 10 * 1024 * 1024
+    return MAX_INPUT_IMAGE_BYTES
+
+
+def _verify_input_image(
+    data: bytes,
+    index: int | None = None,
+    provider: str | None = None,
+) -> None:
+    label = f"input image {index}" if index is not None else f"{provider} input image"
+    try:
+        with Image.open(BytesIO(data)) as image:
+            image.verify()
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise ImageGenerationError(f"{label} is corrupt or incomplete") from exc
+
+
+def _content_length(headers: Any, provider: str) -> int:
+    value = headers.get("Content-Length", "0") or "0"
+    try:
+        length = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ImageGenerationError(
+            f"{provider} returned an invalid Content-Length header"
+        ) from exc
+    if length < 0:
+        raise ImageGenerationError(
+            f"{provider} returned an invalid Content-Length header"
+        )
+    return length
+
+
+def _resolve_public_image_addresses(url: str, provider: str) -> tuple[Any, list[str]]:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ImageGenerationError(f"{provider} input image URL is invalid")
@@ -715,24 +780,74 @@ def _validate_public_image_url(url: str, provider: str) -> None:
         )
     effective_port = port or (443 if parsed.scheme == "https" else 80)
     try:
-        addresses = socket.getaddrinfo(parsed.hostname, effective_port, type=socket.SOCK_STREAM)
+        addresses = socket.getaddrinfo(
+            parsed.hostname,
+            effective_port,
+            type=socket.SOCK_STREAM,
+        )
     except socket.gaierror as exc:
         raise ImageGenerationError(
             f"{provider} input image host could not be resolved"
         ) from exc
     if not addresses:
         raise ImageGenerationError(f"{provider} input image host could not be resolved")
+    public_addresses = []
     for address in addresses:
         ip = ipaddress.ip_address(address[4][0])
         if not ip.is_global:
             raise ImageGenerationError(
                 f"{provider} input image URL must resolve to a public address"
             )
+        value = str(ip)
+        if value not in public_addresses:
+            public_addresses.append(value)
+    return parsed, public_addresses
 
 
-def _load_input_image(
-    session: requests.Session, source: str, provider: str
-) -> tuple[bytes, str]:
+def _pinned_image_request(url: str, provider: str):
+    parsed, addresses = _resolve_public_image_addresses(url, provider)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    default_port = 443 if parsed.scheme == "https" else 80
+    host_header = parsed.hostname if port == default_port else f"{parsed.hostname}:{port}"
+    target = urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+    last_error = None
+
+    for address in addresses:
+        pool_class = (
+            HTTPSConnectionPool if parsed.scheme == "https" else HTTPConnectionPool
+        )
+        kwargs: dict[str, Any] = {
+            "host": address,
+            "port": port,
+            "timeout": DEFAULT_TIMEOUT,
+            "retries": False,
+        }
+        if parsed.scheme == "https":
+            kwargs.update(
+                assert_hostname=parsed.hostname,
+                cert_reqs="CERT_REQUIRED",
+                server_hostname=parsed.hostname,
+            )
+        pool = pool_class(**kwargs)
+        try:
+            response = pool.request(
+                "GET",
+                target,
+                headers={"Host": host_header, "Accept": "image/*"},
+                preload_content=False,
+                redirect=False,
+            )
+            return response, pool
+        except urllib3.exceptions.HTTPError as exc:
+            last_error = exc
+            pool.close()
+
+    raise ImageGenerationError(
+        f"failed to download {provider} input image: {last_error or 'connection failed'}"
+    )
+
+
+def _load_input_image(source: str, provider: str) -> tuple[bytes, str]:
     if not _is_http_url(source):
         _, _, encoded = source.partition(",")
         try:
@@ -740,21 +855,18 @@ def _load_input_image(
         except (binascii.Error, ValueError) as exc:
             raise ImageGenerationError(f"{provider} input image has invalid base64 data") from exc
         mime_type = _input_image_mime_type(data)
-        if not mime_type:
+        if mime_type not in COMMON_INPUT_IMAGE_MIME_TYPES:
             raise ImageGenerationError(f"{provider} input image has an unsupported format")
+        _verify_input_image(data, provider=provider)
         return data, mime_type
 
     current_url = source
     for redirect_count in range(MAX_IMAGE_REDIRECTS + 1):
-        _validate_public_image_url(current_url, provider)
+        response = None
+        pool = None
         try:
-            response = session.get(
-                current_url,
-                timeout=DEFAULT_TIMEOUT,
-                stream=True,
-                allow_redirects=False,
-            )
-            if response.is_redirect or response.is_permanent_redirect:
+            response, pool = _pinned_image_request(current_url, provider)
+            if response.status in {301, 302, 303, 307, 308}:
                 if redirect_count >= MAX_IMAGE_REDIRECTS:
                     raise ImageGenerationError(
                         f"{provider} input image exceeded the redirect limit"
@@ -766,13 +878,16 @@ def _load_input_image(
                     )
                 current_url = urljoin(current_url, location)
                 continue
-            response.raise_for_status()
-            content_length = int(response.headers.get("Content-Length", "0") or 0)
+            if response.status >= 400:
+                raise ImageGenerationError(
+                    f"failed to download {provider} input image: HTTP {response.status}"
+                )
+            content_length = _content_length(response.headers, provider)
             if content_length > MAX_INPUT_IMAGE_BYTES:
                 raise ImageGenerationError(f"{provider} input image exceeds the 20 MB limit")
             chunks = []
             total = 0
-            for chunk in response.iter_content(64 * 1024):
+            for chunk in response.stream(64 * 1024):
                 if not chunk:
                     continue
                 total += len(chunk)
@@ -781,14 +896,20 @@ def _load_input_image(
                         f"{provider} input image exceeds the 20 MB limit"
                     )
                 chunks.append(chunk)
-        except requests.RequestException as exc:
+        except urllib3.exceptions.HTTPError as exc:
             raise ImageGenerationError(
                 f"failed to download {provider} input image: {exc}"
             ) from exc
+        finally:
+            if response is not None:
+                response.release_conn()
+            if pool is not None:
+                pool.close()
         data = b"".join(chunks)
         mime_type = _input_image_mime_type(data)
-        if not mime_type:
+        if mime_type not in COMMON_INPUT_IMAGE_MIME_TYPES:
             raise ImageGenerationError(f"{provider} input image has an unsupported format")
+        _verify_input_image(data, provider=provider)
         return data, mime_type
 
     raise ImageGenerationError(f"{provider} input image could not be downloaded")

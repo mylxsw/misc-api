@@ -24,7 +24,7 @@
 - `tests/test_image_api.py`：统一 HTTP API 测试。
 - `tests/test_object_storage.py`：S3/R2 存储测试。
 
-统一请求公开 `provider`、`model`、`prompt`、`size`、`images` 和 `return_url`。`images` 为可选数组，支持 1–3 个公网 URL、Base64 data URI 或裸 Base64，用于图像编辑、多图融合和参考生成。Base64 输入会校验图片格式及 20 MB 单图上限，并统一转换为带 MIME 类型的 data URI。不同上游的 `size` 和输入图片字段由适配器转换。生成结果默认返回 `image_base64`；`return_url=true` 时上传 R2 并返回 `image_url`。
+统一请求公开 `provider`、`model`、`prompt`、`size`、`images` 和 `return_url`。`images` 为可选数组，支持 1–3 个公网 URL、Base64 data URI 或裸 Base64，用于图像编辑、多图融合和参考生成。Base64 输入仅接受跨 provider 可移植的 JPEG、PNG、WebP，并执行完整图片校验。Qwen Image、Wan 2.6、ToAPIs 的单图上限为 10 MB，其余适配器为 20 MB；ToAPIs 只接受 URL。不同上游的 `size` 和输入图片字段由适配器转换。生成结果默认返回 `image_base64`；`return_url=true` 时上传 R2 并返回 `image_url`。
 
 图生图沿用现有两个生成入口，不增加独立路由：
 
@@ -73,13 +73,13 @@ Provider 映射如下：
 
 ### 对接信息
 
-- Endpoint：`POST {GEMINI_API_BASE}/v1beta/models/{model}:generateContent`
-- 鉴权：Query 参数 `key`，项目中来自 `GEMINI_API_KEY`。
+- Endpoint：`POST {GEMINI_API_BASE}/v1/models/{model}:generateContent`
+- 鉴权：`x-goog-api-key` Header，项目中来自 `GEMINI_API_KEY`。
 - 响应图片：`candidates[0].content.parts[].inlineData.data`。
 - 图生图：统一 `images` 会转换成 `parts[].inlineData`；URL 由服务端下载并转换，Base64 直接解码后重新编码。
-- 为防止服务端请求伪造，Gemini URL 输入只允许解析到公网地址的 HTTP(S) URL、80/443 端口，并逐次校验重定向目标。
-- `size` 为分辨率时映射到 `generationConfig.imageConfig.imageSize`；宽高比映射到 `aspectRatio`。
-- 当前目录快照包含 `gemini-3.1-flash-image-preview`、`gemini-3-pro-image-preview`。实际可用模型取决于 API Key、地域和 Google 的模型生命周期。
+- 为防止服务端请求伪造，Gemini URL 输入只允许解析到公网地址的 HTTP(S) URL、80/443 端口，并逐次校验重定向目标；实际连接固定使用已验证 IP，同时保留原域名的 TLS SNI 与证书校验，避免 DNS 重绑定。
+- `size` 映射到当前 REST 协议的 `generationConfig.responseFormat.image`：分辨率使用 `imageSize`，宽高比使用 `aspectRatio`。
+- 当前首选模型为 `gemini-3.1-flash-image`、`gemini-3-pro-image`；目录暂时保留两个 `*-preview` ID 作为兼容别名。实际可用模型取决于 API Key、地域和 Google 的模型生命周期。
 
 ## xAI
 
@@ -257,6 +257,7 @@ GET  {TOAPIS_API_BASE}/images/generations/{task_id}
 ## 已知运维注意事项
 
 - 图片生成 POST 不做自动重试，避免重复计费；任务查询 GET 可重试。
+- HTTP 请求体默认上限为 85 MiB，可通过 `MAX_REQUEST_BYTES` 调整；图片仍受 provider 单图限制。
 - APIMart、ToAPIs、Aliyun Wan 的同步外观由服务端轮询实现。
 - 上游临时 URL 必须立即下载；`return_url=true` 可持久化到 R2。
 - `IMAGE_GENERATION_MAX_WAIT` 和 `IMAGE_GENERATION_POLL_INTERVAL` 控制轮询。

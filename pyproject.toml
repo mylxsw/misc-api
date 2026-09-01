@@ -18,4 +18,6 @@ dependencies = [
     "pyyaml",
     "pygments",
     "boto3>=1.43.83",
+    "chardet<6",
+    "urllib3>=2,<3",
 ]

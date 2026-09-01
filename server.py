@@ -11,6 +11,7 @@ from typing import Tuple, List
 from io import BytesIO
 
 from flask import Flask, jsonify, request
+from werkzeug.exceptions import RequestEntityTooLarge
 import dashscope
 from dashscope.audio.tts_v2 import SpeechSynthesizer
 import requests
@@ -38,7 +39,7 @@ from fishaudio import FishAudio
 from fishaudio.types import TTSConfig, Prosody
 from lib.image_generation import (
     ImageGenerationError,
-    generate_image,
+    generate_normalized_image,
     get_image_model_catalog,
     get_provider,
     normalize_input_images,
@@ -52,6 +53,15 @@ if _resolved_api_key:
     dashscope.api_key = _resolved_api_key
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = int(
+    os.getenv("MAX_REQUEST_BYTES", str(85 * 1024 * 1024))
+)
+
+
+@app.errorhandler(413)
+def request_too_large(_error):
+    return jsonify({"error": "request body exceeds the configured size limit"}), 413
+
 
 DEFAULT_MODEL = "cosyvoice-v2"
 DEFAULT_VOICE = "libai_v2"
@@ -409,7 +419,7 @@ def _parse_image_generation_payload(payload):
     if images is not None and not isinstance(images, list):
         raise ValueError("parameter 'images' must be an array of image references")
     try:
-        images = normalize_input_images(images)
+        images = normalize_input_images(images, provider=provider, model=model)
     except ImageGenerationError as exc:
         raise ValueError(str(exc)) from exc
     if not isinstance(return_url, bool):
@@ -420,7 +430,7 @@ def _parse_image_generation_payload(payload):
 def _generate_image_response(provider, model, prompt, size, images, return_url):
     # Validate storage before generating a billable image.
     storage = S3ImageStorage.from_env() if return_url else None
-    image = generate_image(
+    image = generate_normalized_image(
         provider=provider,
         model=model,
         prompt=prompt,
@@ -450,6 +460,8 @@ def image_generation_endpoint():
     try:
         params = _parse_image_generation_payload(request.get_json(silent=True) or {})
         return jsonify(_generate_image_response(*params))
+    except RequestEntityTooLarge as exc:
+        return request_too_large(exc)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except (ImageGenerationError, ObjectStorageError) as exc:
@@ -504,6 +516,8 @@ def async_image_generation_endpoint():
         get_provider(provider)
         if return_url:
             S3ImageStorage.from_env()
+    except RequestEntityTooLarge as exc:
+        return request_too_large(exc)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except (ImageGenerationError, ObjectStorageError) as exc:

@@ -11,6 +11,8 @@ from lib.image_generation import (
     ImageGenerationError,
     ToAPIsProvider,
     XAIProvider,
+    _content_length,
+    _pinned_image_request,
     get_image_model_catalog,
     get_provider,
     normalize_input_images,
@@ -147,8 +149,32 @@ class ImageProviderTests(unittest.TestCase):
         })
 
         self.assertEqual(provider.generate("image-model", "cat", "16:9"), IMAGE)
-        payload = provider._request_json.call_args.kwargs["json"]
-        self.assertEqual(payload["generationConfig"]["imageConfig"], {"aspectRatio": "16:9"})
+        call = provider._request_json.call_args
+        self.assertEqual(
+            call.args[1],
+            "https://gemini.example/v1/models/image-model:generateContent",
+        )
+        self.assertEqual(call.kwargs["headers"], {"x-goog-api-key": "key"})
+        self.assertNotIn("params", call.kwargs)
+        payload = call.kwargs["json"]
+        self.assertEqual(
+            payload["generationConfig"]["responseFormat"],
+            {"image": {"aspectRatio": "16:9"}},
+        )
+
+    def test_gemini_maps_resolution_to_current_rest_response_format(self):
+        provider = GeminiProvider("key", "https://gemini.example")
+        provider._request_json = Mock(return_value={
+            "candidates": [{"content": {"parts": [{
+                "inlineData": {"data": base64.b64encode(IMAGE).decode()}
+            }]}}]
+        })
+
+        provider.generate("image-model", "cat", "2K")
+
+        config = provider._request_json.call_args.kwargs["json"]["generationConfig"]
+        self.assertEqual(config["responseFormat"], {"image": {"imageSize": "2K"}})
+        self.assertNotIn("imageConfig", config)
 
     def test_gemini_sends_reference_image_as_inline_data(self):
         provider = GeminiProvider("key", "https://gemini.example")
@@ -275,6 +301,56 @@ class ImageProviderTests(unittest.TestCase):
     def test_normalize_input_images_rejects_more_than_three(self):
         with self.assertRaisesRegex(ImageGenerationError, "at most 3"):
             normalize_input_images([INPUT_DATA_URI] * 4)
+
+    def test_normalize_input_images_uses_aliyun_qwen_10_mb_limit(self):
+        oversized = base64.b64encode(
+            b"\x89PNG\r\n\x1a\n" + b"x" * (10 * 1024 * 1024)
+        ).decode()
+        with self.assertRaisesRegex(ImageGenerationError, "10 MB"):
+            normalize_input_images(
+                [oversized], provider="aliyun", model="qwen-image-3.0-pro"
+            )
+
+    def test_normalize_input_images_rejects_non_portable_format(self):
+        bmp = base64.b64encode(b"BM" + b"x" * 32).decode()
+        with self.assertRaisesRegex(ImageGenerationError, "unsupported format"):
+            normalize_input_images([bmp], provider="gemini", model="image-model")
+
+    @patch("lib.image_generation.HTTPSConnectionPool")
+    @patch("lib.image_generation.socket.getaddrinfo")
+    def test_pinned_image_request_connects_to_validated_ip_with_original_tls_name(
+        self, getaddrinfo, pool_class
+    ):
+        getaddrinfo.return_value = [
+            (2, 1, 6, "", ("93.184.216.34", 443)),
+        ]
+        response = Mock()
+        pool_class.return_value.request.return_value = response
+
+        actual, pool = _pinned_image_request("https://example.com/image.png?x=1", "gemini")
+
+        self.assertIs(actual, response)
+        self.assertIs(pool, pool_class.return_value)
+        pool_class.assert_called_once_with(
+            host="93.184.216.34",
+            port=443,
+            timeout=120,
+            retries=False,
+            assert_hostname="example.com",
+            cert_reqs="CERT_REQUIRED",
+            server_hostname="example.com",
+        )
+        pool_class.return_value.request.assert_called_once_with(
+            "GET",
+            "/image.png?x=1",
+            headers={"Host": "example.com", "Accept": "image/*"},
+            preload_content=False,
+            redirect=False,
+        )
+
+    def test_invalid_content_length_is_reported_as_provider_error(self):
+        with self.assertRaisesRegex(ImageGenerationError, "invalid Content-Length"):
+            _content_length({"Content-Length": "not-a-number"}, "gemini")
 
     def test_model_catalog_covers_every_provider(self):
         catalog = get_image_model_catalog()

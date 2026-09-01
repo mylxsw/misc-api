@@ -36,6 +36,7 @@ The following environment variables are required to run the service:
 | `X_AI_API_BASE` | xAI API base URL | No |
 | `IMAGE_GENERATION_MAX_WAIT` | Maximum provider wait time in seconds (default `300`) | No |
 | `IMAGE_GENERATION_POLL_INTERVAL` | APIMart/ToAPIs/Alibaba Cloud polling interval in seconds (default `5`) | No |
+| `MAX_REQUEST_BYTES` | Maximum HTTP request body size in bytes (default `89128960`, 85 MiB) | No |
 | `R2_ENDPOINT` | Cloudflare R2 S3 endpoint | Yes (when `return_url=true`) |
 | `R2_BUCKET` | R2 bucket name | Yes (when `return_url=true`) |
 | `R2_ACCESS_KEY_ID` | R2 access key ID | Yes (when `return_url=true`) |
@@ -142,11 +143,13 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
   ```
 
   `images` is also supported by the asynchronous endpoint. Base64 input is
-  canonicalized to `data:<mime>;base64,...` after validating the image format
-  and a 20 MB per-image limit. For security, Gemini only downloads URLs that
-  resolve to public addresses on port 80 or 443. ToAPIs currently accepts only
-  public HTTP(S) URLs for `image_urls`. Alibaba Cloud `z-image-turbo` and
-  `wan2.5-t2i-preview` are text-to-image only and reject `images`.
+  canonicalized to `data:<mime>;base64,...` after full image validation. The
+  portable Base64 formats are JPEG, PNG, and WebP. Qwen Image, Wan 2.6, and
+  ToAPIs use a 10 MB per-image limit; other adapters use 20 MB. Input URLs must
+  resolve exclusively to public addresses on ports 80 or 443. Gemini downloads
+  URLs through the already validated IP while preserving TLS hostname checks,
+  preventing DNS rebinding. ToAPIs accepts URL input only. Alibaba Cloud
+  `z-image-turbo` and `wan2.5-t2i-preview` are text-to-image only.
 
   APIMart and ToAPIs are asynchronous upstream services. Alibaba Cloud Wan
   models are asynchronous, while Qwen Image and Z-Image are synchronous. This

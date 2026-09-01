@@ -11,6 +11,25 @@ INPUT_IMAGE_BASE64 = (
 
 
 class ImageAPIModelsTests(unittest.TestCase):
+    def test_request_body_limit_returns_json_413(self):
+        previous = app.config["MAX_CONTENT_LENGTH"]
+        app.config["MAX_CONTENT_LENGTH"] = 64
+        try:
+            with app.test_client() as client:
+                response = client.post(
+                    "/v1/images/generations",
+                    data=b"{" + b"x" * 128 + b"}",
+                    content_type="application/json",
+                )
+        finally:
+            app.config["MAX_CONTENT_LENGTH"] = previous
+
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(
+            response.get_json(),
+            {"error": "request body exceeds the configured size limit"},
+        )
+
     def test_models_endpoint_returns_catalog(self):
         with app.test_client() as client:
             response = client.get("/v1/images/models")
@@ -21,7 +40,7 @@ class ImageAPIModelsTests(unittest.TestCase):
         self.assertEqual(len(body["providers"]), 6)
         self.assertTrue(all(item["models"] for item in body["providers"]))
 
-    @patch("server.generate_image", return_value=b"image-bytes")
+    @patch("server.generate_normalized_image", return_value=b"image-bytes")
     def test_generation_defaults_to_base64(self, _generate):
         with app.test_client() as client:
             response = client.post("/v1/images/generations", json={
@@ -35,7 +54,7 @@ class ImageAPIModelsTests(unittest.TestCase):
         self.assertEqual(body["image_base64"], base64.b64encode(b"image-bytes").decode())
         self.assertNotIn("image_url", body)
 
-    @patch("server.generate_image", return_value=b"image-bytes")
+    @patch("server.generate_normalized_image", return_value=b"image-bytes")
     def test_generation_passes_normalized_input_images(self, generate):
         with app.test_client() as client:
             response = client.post("/v1/images/generations", json={
@@ -54,7 +73,7 @@ class ImageAPIModelsTests(unittest.TestCase):
             images=[f"data:image/png;base64,{INPUT_IMAGE_BASE64}"],
         )
 
-    @patch("server.generate_image", return_value=b"image-bytes")
+    @patch("server.generate_normalized_image", return_value=b"image-bytes")
     @patch("server.S3ImageStorage.from_env")
     def test_generation_can_return_uploaded_url(self, from_env, _generate):
         storage = Mock()
@@ -121,7 +140,7 @@ class ImageAPIModelsTests(unittest.TestCase):
         )
         thread_class.return_value.start.assert_called_once_with()
 
-    @patch("server.generate_image", side_effect=ImageGenerationError("provider detail"))
+    @patch("server.generate_normalized_image", side_effect=ImageGenerationError("provider detail"))
     def test_provider_error_preserves_json_body_without_using_502(self, _generate):
         with app.test_client() as client:
             response = client.post("/v1/images/generations", json={
