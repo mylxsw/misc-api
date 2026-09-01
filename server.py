@@ -42,6 +42,7 @@ from lib.image_generation import (
     generate_normalized_image,
     get_image_model_catalog,
     get_provider,
+    normalize_image_aspect_ratio,
     normalize_input_images,
 )
 from lib.object_storage import ObjectStorageError, S3ImageStorage
@@ -410,6 +411,7 @@ def _parse_image_generation_payload(payload):
     resolution = payload.get("resolution")
     images = payload.get("images")
     return_url = payload.get("return_url", False)
+    record_history = payload.get("record_history", False)
 
     if not provider:
         raise ValueError("parameter 'provider' is required")
@@ -435,6 +437,17 @@ def _parse_image_generation_payload(payload):
         raise ValueError(str(exc)) from exc
     if not isinstance(return_url, bool):
         raise ValueError("parameter 'return_url' must be a boolean")
+    if not isinstance(record_history, bool):
+        raise ValueError("parameter 'record_history' must be a boolean")
+    try:
+        size, aspect_ratio = normalize_image_aspect_ratio(
+            provider,
+            model,
+            size.strip() if size else None,
+            aspect_ratio.strip() if aspect_ratio else None,
+        )
+    except ImageGenerationError as exc:
+        raise ValueError(str(exc)) from exc
     return (
         provider,
         model,
@@ -444,6 +457,7 @@ def _parse_image_generation_payload(payload):
         return_url,
         aspect_ratio.strip() if aspect_ratio else None,
         resolution.strip() if resolution else None,
+        record_history,
     )
 
 
@@ -457,6 +471,7 @@ def _generate_image_response(
     aspect_ratio=None,
     resolution=None,
     generation_id=None,
+    record_history=False,
 ):
     # Validate storage before generating a billable image.
     storage = S3ImageStorage.from_env() if return_url else None
@@ -477,15 +492,26 @@ def _generate_image_response(
         result["image_url"] = storage.upload_image(image)
     else:
         result["image_base64"] = base64.b64encode(image).decode("ascii")
-    save_image_history_async(
-        generation_id=generation_id or str(uuid.uuid4()),
-        image=image,
-        provider=provider,
-        model=model,
-        prompt=prompt,
-        size=resolution or aspect_ratio or size,
-    )
+    if record_history:
+        save_image_history_async(
+            generation_id=generation_id or str(uuid.uuid4()),
+            image=image,
+            provider=provider,
+            model=model,
+            prompt=prompt,
+            size=_image_history_size(size, aspect_ratio, resolution),
+        )
     return result
+
+
+def _image_history_size(
+    size: str | None,
+    aspect_ratio: str | None,
+    resolution: str | None,
+) -> str | None:
+    if aspect_ratio and resolution:
+        return f"{aspect_ratio} @ {resolution}"
+    return aspect_ratio or resolution or size
 
 
 @app.route("/v1/images/models", methods=["GET"])
@@ -499,7 +525,12 @@ def image_generation_endpoint():
     """Generate one image and wait for the provider to return the final result."""
     try:
         params = _parse_image_generation_payload(request.get_json(silent=True) or {})
-        return jsonify(_generate_image_response(*params))
+        return jsonify(
+            _generate_image_response(
+                *params[:8],
+                record_history=params[8],
+            )
+        )
     except RequestEntityTooLarge as exc:
         return request_too_large(exc)
     except ValueError as exc:
@@ -529,20 +560,22 @@ def process_image_generation_task(
     return_url,
     aspect_ratio=None,
     resolution=None,
+    record_history=False,
 ):
     try:
         task_info = {
             "status": "success",
             **_generate_image_response(
-                provider,
-                model,
-                prompt,
-                size,
-                images,
-                return_url,
-                aspect_ratio,
-                resolution,
-                task_id,
+                provider=provider,
+                model=model,
+                prompt=prompt,
+                size=size,
+                images=images,
+                return_url=return_url,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                generation_id=task_id,
+                record_history=record_history,
             ),
             "created_at": time.time(),
             "task_id": task_id,
@@ -578,6 +611,7 @@ def async_image_generation_endpoint():
             return_url,
             aspect_ratio,
             resolution,
+            record_history,
         ) = _parse_image_generation_payload(request.get_json(silent=True) or {})
         # Validate provider and storage configuration before accepting a task.
         get_provider(provider)
@@ -612,6 +646,7 @@ def async_image_generation_endpoint():
             return_url,
             aspect_ratio,
             resolution,
+            record_history,
         ),
         daemon=True,
     )

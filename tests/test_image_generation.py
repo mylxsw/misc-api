@@ -15,6 +15,7 @@ from lib.image_generation import (
     _pinned_image_request,
     get_image_model_catalog,
     get_provider,
+    normalize_image_aspect_ratio,
     normalize_input_images,
 )
 
@@ -27,6 +28,67 @@ INPUT_DATA_URI = f"data:image/png;base64,{base64.b64encode(INPUT_IMAGE).decode()
 
 
 class ImageProviderTests(unittest.TestCase):
+    def test_aspect_ratio_keeps_model_supported_extreme_ratio(self):
+        size, ratio = normalize_image_aspect_ratio(
+            "gemini", "gemini-3.1-flash-image", None, "1:8"
+        )
+        self.assertIsNone(size)
+        self.assertEqual(ratio, "1:8")
+
+    def test_aspect_ratio_maps_to_closest_supported_ratio(self):
+        cases = [
+            ("gemini", "gemini-3-pro-image", "1:8", "9:16"),
+            ("ark", "doubao-seedream-5-0-260128", "4:5", "3:4"),
+            ("xai", "grok-imagine-image-2.0", "5:4", "4:3"),
+            ("toapis", "gpt-image-2", "2.35:1", "21:9"),
+            ("apimart", "gemini-3.1-flash-image-preview", "1:4", "1:4"),
+        ]
+        for provider, model, requested, expected in cases:
+            with self.subTest(provider=provider, model=model, requested=requested):
+                _, ratio = normalize_image_aspect_ratio(
+                    provider, model, None, requested
+                )
+                self.assertEqual(ratio, expected)
+
+
+    def test_provider_matching_is_case_insensitive(self):
+        self.assertEqual(
+            normalize_image_aspect_ratio(
+                " Gemini ", " GEMINI-3.1-FLASH-IMAGE ", None, "1:8"
+            )[1],
+            "1:8",
+        )
+
+    def test_legacy_size_ratio_is_also_normalized(self):
+        size, ratio = normalize_image_aspect_ratio(
+            "ark", "doubao-seedream-5-0-260128", "8:1", None
+        )
+        self.assertEqual(size, "21:9")
+        self.assertIsNone(ratio)
+
+    def test_unknown_aspect_ratio_is_rejected(self):
+        with self.assertRaisesRegex(ImageGenerationError, "unsupported aspect ratio"):
+            normalize_image_aspect_ratio(
+                "gemini", "gemini-3.1-flash-image", None, "7:5"
+            )
+
+    def test_provider_specific_ratios_are_not_rejected(self):
+        cases = [
+            ("apimart", "gpt-image-2", "3:1"),
+            ("toapis", "gpt-image-2", "2:1"),
+            ("xai", "grok-imagine-image-2.0", "5:2"),
+        ]
+        for provider, model, expected in cases:
+            with self.subTest(provider=provider, model=model):
+                _, ratio = normalize_image_aspect_ratio(provider, model, None, expected)
+                self.assertEqual(ratio, expected)
+
+    def test_gemini_flash_lite_does_not_receive_extreme_ratio(self):
+        _, ratio = normalize_image_aspect_ratio(
+            "gemini", "gemini-3.1-flash-lite-image", None, "1:8"
+        )
+        self.assertEqual(ratio, "9:16")
+
     def test_ark_requests_base64_and_maps_ratio(self):
         provider = ArkProvider("key", "https://ark.example/api/v3")
         provider._request_json = Mock(return_value={
@@ -135,6 +197,15 @@ class ImageProviderTests(unittest.TestCase):
         payload = provider._request_json.call_args.kwargs["json"]
         self.assertEqual(payload["parameters"]["size"], "1024*1024")
 
+    def test_aliyun_preserves_explicit_pixel_dimensions(self):
+        payload = AliyunProvider._payload(
+            "qwen-image-3.0-pro",
+            "cat",
+            "1024x1536",
+        )
+
+        self.assertEqual(payload["parameters"]["size"], "1024*1536")
+
     def test_aliyun_combines_new_ratio_and_resolution(self):
         payload = AliyunProvider._payload(
             "qwen-image-3.0-pro",
@@ -180,17 +251,17 @@ class ImageProviderTests(unittest.TestCase):
         call = provider._request_json.call_args
         self.assertEqual(
             call.args[1],
-            "https://gemini.example/v1/models/image-model:generateContent",
+            "https://gemini.example/v1beta/models/image-model:generateContent",
         )
         self.assertEqual(call.kwargs["headers"], {"x-goog-api-key": "key"})
         self.assertNotIn("params", call.kwargs)
         payload = call.kwargs["json"]
         self.assertEqual(
-            payload["generationConfig"]["responseFormat"],
-            {"image": {"aspectRatio": "16:9"}},
+            payload["generationConfig"]["imageConfig"],
+            {"aspectRatio": "16:9"},
         )
 
-    def test_gemini_maps_resolution_to_current_rest_response_format(self):
+    def test_gemini_maps_resolution_to_generate_content_image_config(self):
         provider = GeminiProvider("key", "https://gemini.example")
         provider._request_json = Mock(return_value={
             "candidates": [{"content": {"parts": [{
@@ -201,8 +272,8 @@ class ImageProviderTests(unittest.TestCase):
         provider.generate("image-model", "cat", "2K")
 
         config = provider._request_json.call_args.kwargs["json"]["generationConfig"]
-        self.assertEqual(config["responseFormat"], {"image": {"imageSize": "2K"}})
-        self.assertNotIn("imageConfig", config)
+        self.assertEqual(config["imageConfig"], {"imageSize": "2K"})
+        self.assertNotIn("responseFormat", config)
 
     def test_gemini_sends_ratio_and_resolution_with_new_fields_taking_precedence(self):
         provider = GeminiProvider("key", "https://gemini.example")
@@ -222,8 +293,8 @@ class ImageProviderTests(unittest.TestCase):
 
         config = provider._request_json.call_args.kwargs["json"]["generationConfig"]
         self.assertEqual(
-            config["responseFormat"],
-            {"image": {"aspectRatio": "16:9", "imageSize": "2K"}},
+            config["imageConfig"],
+            {"aspectRatio": "16:9", "imageSize": "2K"},
         )
 
     def test_gemini_sends_reference_image_as_inline_data(self):
@@ -242,6 +313,22 @@ class ImageProviderTests(unittest.TestCase):
         self.assertIn("provided reference image", parts[0]["text"])
         self.assertEqual(parts[1]["inline_data"]["mime_type"], "image/png")
         self.assertEqual(parts[1]["inline_data"]["data"], base64.b64encode(INPUT_IMAGE).decode())
+
+    def test_gemini_no_image_error_includes_finish_message(self):
+        provider = GeminiProvider("key", "https://gemini.example")
+        provider._request_json = Mock(return_value={
+            "candidates": [{
+                "finishReason": "IMAGE_SAFETY",
+                "finishMessage": "blocked image details",
+                "content": {"parts": [{"text": "cannot generate"}]},
+            }]
+        })
+
+        with self.assertRaisesRegex(
+            ImageGenerationError,
+            "IMAGE_SAFETY: blocked image details",
+        ):
+            provider.generate("image-model", "cat", None)
 
     def test_gemini_rejects_private_input_image_url(self):
         provider = GeminiProvider("key", "https://gemini.example")
@@ -312,6 +399,57 @@ class ImageProviderTests(unittest.TestCase):
         self.assertEqual(provider._download_image.call_args.args[0], "https://image.example/a.png")
 
     @patch("lib.image_generation.time.sleep")
+    def test_apimart_uses_auto_for_text_generation_without_size(self, _sleep):
+        provider = APIMartProvider("key", "https://apimart.example/v1")
+        provider._request_json = Mock(side_effect=[
+            {"code": 200, "data": [{"task_id": "task-auto"}]},
+            {"code": 200, "data": {
+                "status": "completed",
+                "result": {"images": [{"url": ["https://image.example/a.png"]}]},
+            }},
+        ])
+        provider._download_image = Mock(return_value=IMAGE)
+
+        provider.generate("gemini-3.1-flash-image-preview", "cat", None)
+
+        payload = provider._request_json.call_args_list[0].kwargs["json"]
+        self.assertEqual(payload["size"], "auto")
+
+    @patch("lib.image_generation.time.sleep")
+    def test_apimart_gpt_image_edit_inherits_input_size(self, _sleep):
+        provider = APIMartProvider("key", "https://apimart.example/v1")
+        provider._request_json = Mock(side_effect=[
+            {"code": 200, "data": [{"task_id": "task-edit"}]},
+            {"code": 200, "data": {
+                "status": "completed",
+                "result": {"images": [{"url": ["https://image.example/a.png"]}]},
+            }},
+        ])
+        provider._download_image = Mock(return_value=IMAGE)
+
+        provider.generate("gpt-image-2", "edit", None, [INPUT_DATA_URI])
+
+        payload = provider._request_json.call_args_list[0].kwargs["json"]
+        self.assertNotIn("size", payload)
+
+    @patch("lib.image_generation.time.sleep")
+    def test_apimart_gpt_image_edit_detection_is_case_insensitive(self, _sleep):
+        provider = APIMartProvider("key", "https://apimart.example/v1")
+        provider._request_json = Mock(side_effect=[
+            {"code": 200, "data": [{"task_id": "task-edit-case"}]},
+            {"code": 200, "data": {
+                "status": "completed",
+                "result": {"images": [{"url": ["https://image.example/a.png"]}]},
+            }},
+        ])
+        provider._download_image = Mock(return_value=IMAGE)
+
+        provider.generate("GPT-IMAGE-2", "edit", None, [INPUT_DATA_URI])
+
+        payload = provider._request_json.call_args_list[0].kwargs["json"]
+        self.assertNotIn("size", payload)
+
+    @patch("lib.image_generation.time.sleep")
     def test_apimart_new_fields_override_legacy_dimensions(self, _sleep):
         provider = APIMartProvider("key", "https://apimart.example/v1")
         provider._request_json = Mock(side_effect=[
@@ -350,6 +488,45 @@ class ImageProviderTests(unittest.TestCase):
         submit = provider._request_json.call_args_list[0]
         self.assertNotIn("resolution", submit.kwargs["json"])
         self.assertNotIn("size", submit.kwargs["json"])
+
+    @patch("lib.image_generation.time.sleep")
+    def test_toapis_gemini_places_resolution_in_metadata(self, _sleep):
+        provider = ToAPIsProvider("key", "https://toapis.example/v1")
+        provider._request_json = Mock(side_effect=[
+            {"id": "task-metadata", "status": "queued"},
+            {"id": "task-metadata", "status": "completed", "result": {
+                "data": [{"url": "https://image.example/b.png"}]
+            }},
+        ])
+        provider._download_image = Mock(return_value=IMAGE)
+
+        provider.generate(
+            "gemini-3.1-flash-image-preview",
+            "cat",
+            None,
+            resolution="2K",
+        )
+
+        payload = provider._request_json.call_args_list[0].kwargs["json"]
+        self.assertNotIn("resolution", payload)
+        self.assertEqual(payload["metadata"], {"resolution": "2K"})
+
+    @patch("lib.image_generation.time.sleep")
+    def test_toapis_gpt_image_keeps_top_level_resolution(self, _sleep):
+        provider = ToAPIsProvider("key", "https://toapis.example/v1")
+        provider._request_json = Mock(side_effect=[
+            {"id": "task-resolution", "status": "queued"},
+            {"id": "task-resolution", "status": "completed", "result": {
+                "data": [{"url": "https://image.example/b.png"}]
+            }},
+        ])
+        provider._download_image = Mock(return_value=IMAGE)
+
+        provider.generate("gpt-image-2", "cat", None, resolution="2k")
+
+        payload = provider._request_json.call_args_list[0].kwargs["json"]
+        self.assertEqual(payload["resolution"], "2k")
+        self.assertNotIn("metadata", payload)
 
     @patch("lib.image_generation.time.sleep")
     def test_toapis_uses_image_urls_field(self, _sleep):

@@ -116,10 +116,11 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
   | `model` | string | Yes | Provider-specific model identifier |
   | `prompt` | string | Yes | Image description |
   | `size` | string | No | Legacy compatibility field: resolution (`1K`, `2K`, `4K`) or aspect ratio (`1:1`, `16:9`, etc.) |
-  | `aspect_ratio` | string | No | Output aspect ratio, such as `1:1`, `16:9`, or `3:2` |
+  | `aspect_ratio` | string | No | Output aspect ratio, such as `1:1`, `16:9`, `21:9`, or `2.35:1`. Provider-specific ratios such as `3:1`, `5:2`, and mobile-display ratios are also accepted; unsupported model-specific values are mapped to the closest supported ratio |
   | `resolution` | string | No | Output resolution tier, such as `1K`, `2K`, or `4K`; availability depends on the model |
   | `images` | string[] | No | One to three input images for editing/reference generation; each item is a public URL, Base64 data URI, or bare Base64 |
   | `return_url` | boolean | No | Upload to configured S3/R2 storage and return `image_url` instead of Base64 (default `false`) |
+  | `record_history` | boolean | No | Save the completed generation to the configured history API in the background (default `false`) |
 
   ```json
   {
@@ -128,7 +129,8 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
     "prompt": "一只橘猫坐在窗台上看夕阳，水彩画风格",
     "aspect_ratio": "16:9",
     "resolution": "2K",
-    "return_url": false
+    "return_url": false,
+    "record_history": true
   }
   ```
 
@@ -157,6 +159,12 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
   preventing DNS rebinding. ToAPIs accepts URL input only. Alibaba Cloud
   `z-image-turbo` and `wan2.5-t2i-preview` are text-to-image only.
 
+  The API accepts a common set of aspect ratios across providers. When the
+  selected provider/model does not support a requested ratio, the adapter uses
+  the closest supported ratio by multiplicative distance; for example, `2.35:1` maps to `21:9`
+  where native `2.35:1` support is unavailable. Legacy `size` ratios use the
+  same normalization.
+
   `size` remains fully supported for existing clients. It is first interpreted
   using its original behavior: known resolution tiers map to the provider's
   resolution setting, while other values map to its aspect-ratio/size setting.
@@ -176,8 +184,10 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
   image, and returns the same response format for every provider. Ark requests
   `b64_json` directly from Seedream and therefore does not need a result download.
   xAI also requests `b64_json` so deployments do not depend on access to its
-  temporary image CDN. If all three sizing fields are omitted, no sizing field
-  is sent upstream and each model applies its own default; see
+  temporary image CDN. If all three sizing fields are omitted, providers normally
+  receive no sizing field and apply their own defaults. APIMart is the exception:
+  text-to-image and Gemini/Nano Banana editing requests use `size=auto`, while GPT
+  Image editing omits `size` to inherit the input dimensions. See
   `docs/IMAGE_API_SOURCES.md` for the provider/model behavior matrix.
 
 - Base64 response (`return_url=false`):

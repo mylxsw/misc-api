@@ -53,7 +53,7 @@ Provider 映射如下：
 
 ## 尺寸参数与兼容规则
 
-统一接口提供三个可选尺寸参数：
+统一接口提供三个可选尺寸参数。`aspect_ratio` 接受各 provider 文档声明的比例并包含统一电影比例 `2.35:1`；例如 APIMart GPT Image 的 `3:1`、ToAPIs GPT Image 的 `2:1`、xAI 的 `5:2` 和移动屏幕比例均可使用。如果目标 provider/model 不原生支持所选比例，适配器会按宽高比的乘法距离选择最接近的受支持比例；例如大多数模型会把 `2.35:1` 映射为 `21:9`。旧 `size` 字段中的比例同样执行此规则。
 
 | 参数 | 用途 | 兼容性 |
 | :--- | :--- | :--- |
@@ -113,12 +113,12 @@ Gemini、xAI、APIMart、ToAPIs 的上游协议可以分别携带比例和分辨
 
 ### 对接信息
 
-- Endpoint：`POST {GEMINI_API_BASE}/v1/models/{model}:generateContent`
+- Endpoint：`POST {GEMINI_API_BASE}/v1beta/models/{model}:generateContent`。使用 `v1beta` 是为了同时支持稳定模型与仅在该版本暴露的 preview 模型。
 - 鉴权：`x-goog-api-key` Header，项目中来自 `GEMINI_API_KEY`。
 - 响应图片：`candidates[0].content.parts[].inlineData.data`。
 - 图生图：统一 `images` 会转换成 `parts[].inlineData`；URL 由服务端下载并转换，Base64 直接解码后重新编码。
 - 为防止服务端请求伪造，Gemini URL 输入只允许解析到公网地址的 HTTP(S) URL、80/443 端口，并逐次校验重定向目标；实际连接固定使用已验证 IP，同时保留原域名的 TLS SNI 与证书校验，避免 DNS 重绑定。
-- `resolution` 映射到当前 REST 协议的 `generationConfig.responseFormat.image.imageSize`，`aspect_ratio` 映射到 `aspectRatio`；兼容字段 `size` 仍按原逻辑映射。
+- `resolution` 映射到 `generationConfig.imageConfig.imageSize`，`aspect_ratio` 映射到 `generationConfig.imageConfig.aspectRatio`；兼容字段 `size` 仍按原逻辑映射。
 - 当前首选模型为 `gemini-3.1-flash-image`、`gemini-3-pro-image`；目录暂时保留两个 `*-preview` ID 作为兼容别名。实际可用模型取决于 API Key、地域和 Google 的模型生命周期。
 
 ## xAI
@@ -239,6 +239,7 @@ GET  {APIMART_API_BASE}/tasks/{task_id}
 - 已真实验证：`gpt-image-2`。
 - 图生图使用 `image_urls`，支持公网 URL 和 Base64 data URI 混合输入。
 - `aspect_ratio` 映射为上游 `size`，`resolution` 映射为上游 `resolution`，两者可以同时发送。
+- 文生图未指定比例时发送 `size=auto`；Gemini/Nano Banana 图生图也使用 `auto` 并由上游决定比例。GPT Image 图生图未指定比例时省略 `size`，从而继承输入图尺寸。
 - 兼容文档中的 GPT-Image 和 Nano Banana 模型别名；目录详见 `GET /v1/images/models`。
 
 ## ToAPIs
@@ -265,7 +266,7 @@ GET  {TOAPIS_API_BASE}/images/generations/{task_id}
 - 任务状态：`queued`、`in_progress`、`completed`、`failed`。
 - 图片 URL：`result.data[0].url`，通常有效 24 小时。
 - 图生图统一发送 `image_urls`，兼容 Gemini/Nano Banana；GPT-Image 会由 ToAPIs 归一化为 `reference_images`。ToAPIs 已停止在这些字段中接收 Base64，因此统一接口会提前拒绝非 HTTP(S) 输入。
-- `aspect_ratio` 映射为上游 `size`，`resolution` 映射为上游 `resolution`。三个统一尺寸参数都未指定时不发送任何尺寸字段，由模型采用自身默认值；不会补充不兼容的 `size=auto`。
+- `aspect_ratio` 映射为上游 `size`。GPT Image 的 `resolution` 位于请求顶层；Gemini/Nano Banana 的 `resolution` 映射到 `metadata.resolution`。三个统一尺寸参数都未指定时不发送任何尺寸字段，由模型采用自身默认值；不会补充不兼容的 `size=auto`。
 - 已真实验证：`gpt-image-2`，API Base 使用 `https://toapis.xyz/v1`。
 
 ## Cloudflare R2 / S3

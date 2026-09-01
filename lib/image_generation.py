@@ -133,7 +133,7 @@ class GeminiProvider(ImageProvider):
         generation_config: dict[str, Any] = {"responseModalities": ["TEXT", "IMAGE"]}
         image_config = _gemini_size(size, aspect_ratio, resolution)
         if image_config:
-            generation_config["responseFormat"] = {"image": image_config}
+            generation_config["imageConfig"] = image_config
 
         instruction = (
             f"Edit or generate an image using the provided reference image(s): {prompt}"
@@ -144,7 +144,7 @@ class GeminiProvider(ImageProvider):
 
         body = self._request_json(
             "POST",
-            f"{self.api_base}/v1/models/{quote(model, safe='')}:generateContent",
+            f"{self.api_base}/v1beta/models/{quote(model, safe='')}:generateContent",
             headers={"x-goog-api-key": self.api_key},
             json={
                 "contents": [{"parts": parts}],
@@ -155,13 +155,17 @@ class GeminiProvider(ImageProvider):
         try:
             parts = body["candidates"][0]["content"]["parts"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise ImageGenerationError("gemini response contains no generated image") from exc
+            raise ImageGenerationError(
+                f"gemini response contains no generated image: {_gemini_failure_message(body)}"
+            ) from exc
 
         for part in parts:
             inline = part.get("inlineData") or part.get("inline_data") or {}
             if inline.get("data"):
                 return _decode_base64(inline["data"], self.name)
-        raise ImageGenerationError("gemini response contains no generated image")
+        raise ImageGenerationError(
+            f"gemini response contains no generated image: {_gemini_failure_message(body)}"
+        )
 
 
 class XAIProvider(ImageProvider):
@@ -444,6 +448,9 @@ class AsyncGatewayProvider(ImageProvider, ABC):
             aspect_ratio=aspect_ratio,
             resolution=resolution,
         )
+        if "size" not in payload and self._use_auto_size(model, images):
+            payload["size"] = "auto"
+        self._normalize_payload(model, payload)
         if images:
             payload[self.input_images_field] = images
         body = self._request_json(
@@ -456,6 +463,12 @@ class AsyncGatewayProvider(ImageProvider, ABC):
         if not task_id:
             raise ImageGenerationError(f"{self.name} response contains no task id")
         return self._poll(task_id)
+
+    def _use_auto_size(self, model: str, images: list[str]) -> bool:
+        return False
+
+    def _normalize_payload(self, model: str, payload: dict[str, Any]) -> None:
+        pass
 
     @abstractmethod
     def _task_id(self, body: dict[str, Any]) -> str | None:
@@ -493,6 +506,10 @@ class AsyncGatewayProvider(ImageProvider, ABC):
 class APIMartProvider(AsyncGatewayProvider):
     name = "apimart"
 
+    def _use_auto_size(self, model: str, images: list[str]) -> bool:
+        # GPT Image editing inherits the source dimensions only when size is omitted.
+        return not images or not model.lower().startswith("gpt-image-2")
+
     def _task_id(self, body: dict[str, Any]) -> str | None:
         data = body.get("data")
         if isinstance(data, list) and data and isinstance(data[0], dict):
@@ -517,6 +534,10 @@ class APIMartProvider(AsyncGatewayProvider):
 class ToAPIsProvider(AsyncGatewayProvider):
     name = "toapis"
     public_image_urls_only = True
+
+    def _normalize_payload(self, model: str, payload: dict[str, Any]) -> None:
+        if not model.startswith("gpt-image-2") and "resolution" in payload:
+            payload["metadata"] = {"resolution": payload.pop("resolution")}
 
     def _task_id(self, body: dict[str, Any]) -> str | None:
         return body.get("id")
@@ -667,6 +688,9 @@ def generate_normalized_image(
     resolution: str | None = None,
 ) -> bytes:
     """Generate using image references already validated at the HTTP boundary."""
+    size, aspect_ratio = normalize_image_aspect_ratio(
+        provider, model, size, aspect_ratio
+    )
     return get_provider(provider).generate(
         model=model,
         prompt=prompt,
@@ -699,6 +723,87 @@ def _create_session() -> requests.Session:
 # `size` behavior. Provider-specific tiers such as Ark's 1.5K and 3K should use
 # the explicit `resolution` field in new requests.
 RESOLUTION_TIERS = frozenset({"0.5k", "1k", "2k", "4k"})
+SUPPORTED_ASPECT_RATIOS = (
+    "1:1", "1:2", "1:3", "1:4", "1:8", "2:1", "2:3", "2.35:1",
+    "3:1", "3:2", "3:4", "4:1", "4:3", "4:5", "5:2", "5:4", "8:1",
+    "9:16", "9:19.5", "9:20", "9:21", "16:9", "19.5:9", "20:9", "21:9",
+)
+COMMON_PROVIDER_RATIOS = frozenset({
+    "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9",
+})
+EXTREME_GEMINI_RATIOS = COMMON_PROVIDER_RATIOS | {"1:4", "1:8", "4:1", "8:1"}
+APIMART_GPT_RATIOS = frozenset({
+    "1:1", "1:2", "1:3", "2:1", "2:3", "3:1", "3:2", "3:4", "4:3",
+    "4:5", "5:4", "9:16", "9:21", "16:9", "21:9",
+})
+TOAPIS_GPT_RATIOS = frozenset({
+    "1:1", "1:2", "2:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4",
+    "9:16", "9:21", "16:9", "21:9",
+})
+ARK_RATIOS = frozenset({"1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"})
+XAI_RATIOS = frozenset({
+    "1:1", "1:2", "2:1", "2:3", "3:2", "3:4", "4:3", "5:2", "9:16",
+    "9:19.5", "9:20", "16:9", "19.5:9", "20:9", "21:9",
+})
+
+
+def normalize_image_aspect_ratio(
+    provider: str,
+    model: str,
+    size: str | None,
+    aspect_ratio: str | None,
+) -> tuple[str | None, str | None]:
+    """Map public ratios to the perceptually closest ratio supported upstream."""
+    provider = provider.strip().lower()
+    model = model.strip().lower()
+    if aspect_ratio:
+        aspect_ratio = _closest_supported_ratio(provider, model, aspect_ratio)
+    if size and ":" in size and size.lower() not in RESOLUTION_TIERS:
+        size = _closest_supported_ratio(provider, model, size)
+    return size, aspect_ratio
+
+
+def _closest_supported_ratio(provider: str, model: str, ratio: str) -> str:
+    if ratio not in SUPPORTED_ASPECT_RATIOS:
+        supported = ", ".join(SUPPORTED_ASPECT_RATIOS)
+        raise ImageGenerationError(f"unsupported aspect ratio '{ratio}'; use one of: {supported}")
+    provider_ratios = _provider_aspect_ratios(provider, model)
+    if ratio in provider_ratios:
+        return ratio
+    target = _ratio_value(ratio)
+    candidates = [item for item in SUPPORTED_ASPECT_RATIOS if item in provider_ratios]
+    return min(
+        candidates,
+        key=lambda candidate: abs(math.log(_ratio_value(candidate) / target)),
+    )
+
+
+def _provider_aspect_ratios(provider: str, model: str) -> frozenset[str]:
+    normalized_model = model.lower()
+    if provider == "gemini":
+        return EXTREME_GEMINI_RATIOS if "3.1-flash-image" in normalized_model else COMMON_PROVIDER_RATIOS
+    if provider == "apimart":
+        if normalized_model.startswith("gpt-image-2"):
+            return APIMART_GPT_RATIOS
+        if "3.1-flash-image" in normalized_model or "nano-banana-2" in normalized_model:
+            return EXTREME_GEMINI_RATIOS
+        return COMMON_PROVIDER_RATIOS
+    if provider == "toapis":
+        if normalized_model.startswith("gpt-image-2"):
+            return TOAPIS_GPT_RATIOS
+        if "3.1-flash-image" in normalized_model:
+            return EXTREME_GEMINI_RATIOS
+        return COMMON_PROVIDER_RATIOS
+    if provider == "xai":
+        return XAI_RATIOS
+    if provider == "ark":
+        return ARK_RATIOS
+    return COMMON_PROVIDER_RATIOS
+
+
+def _ratio_value(ratio: str) -> float:
+    width, height = ratio.split(":", 1)
+    return float(width) / float(height)
 
 
 def _size_parts(
@@ -1103,15 +1208,21 @@ def _aliyun_size(
     selected = resolved_ratio or resolved_resolution
     if not selected:
         return None
+    if "*" in selected or "x" in selected.lower():
+        return selected.lower().replace("x", "*")
     normalized = selected.upper()
     if model.startswith("wan"):
         if normalized in {"1K", "2K", "4K"} or "*" in selected:
             return normalized
-        return ALIYUN_2K_RATIOS.get(selected, selected)
+        return ALIYUN_2K_RATIOS.get(
+            selected, _ratio_dimensions(selected, 2048, "*", 16)
+        )
     if normalized in {"0.5K", "1K", "2K", "4K"}:
         pixels = {"0.5K": "512*512", "1K": "1024*1024", "2K": "2048*2048", "4K": "4096*4096"}
         return pixels[normalized]
-    return ALIYUN_1K_RATIOS.get(selected, selected)
+    return ALIYUN_1K_RATIOS.get(
+        selected, _ratio_dimensions(selected, 1024, "*", 16)
+    )
 
 
 def _aliyun_combined_size(model: str, aspect_ratio: str, resolution: str) -> str:
@@ -1195,6 +1306,22 @@ def _decode_base64(value: str, provider: str) -> bytes:
     if len(image) > MAX_IMAGE_BYTES:
         raise ImageGenerationError(f"{provider} image exceeds the 32 MB limit")
     return image
+
+
+def _gemini_failure_message(body: dict[str, Any]) -> str:
+    prompt_feedback = body.get("promptFeedback") or {}
+    candidates = body.get("candidates") or []
+    candidate = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
+    finish_reason = candidate.get("finishReason")
+    finish_message = candidate.get("finishMessage")
+    if finish_reason and finish_message:
+        return f"{finish_reason}: {finish_message}"
+    return str(
+        finish_message
+        or finish_reason
+        or prompt_feedback.get("blockReason")
+        or _error_message(body)
+    )
 
 
 def _error_message(body: Any) -> str:
