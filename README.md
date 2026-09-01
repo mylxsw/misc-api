@@ -470,7 +470,8 @@ curl -X POST http://localhost:8000/v1/wechat/markdown/preview \
 ```
 
 ## Project files
-- `server.py`: Flask app exposing the TTS endpoint
+- `server.py`: Flask app exposing the unified API endpoints
+- `docs/IMAGE_API_SOURCES.md`: Upstream image provider documentation, protocol notes, and update checklist
 - `lib/wechat/`: Markdown → WeChat HTML converter, themes, and draft-box publisher (ported from wewrite)
 - `Dockerfile`: uv-based container image using Gunicorn
 - `pyproject.toml`: dependencies (managed by uv)
