@@ -4,7 +4,7 @@ A Flask-based HTTP API service that integrates multiple AI media generation capa
 - **Alibaba Cloud DashScope CosyVoice TTS**: High-quality text-to-speech synthesis.
 - **Volcano Engine Podcast TTS** ([Official Docs](https://www.volcengine.com/docs/6561/1668014?lang=zh)): Multi-speaker, conversational podcast generation with music support.
 - **Fish Audio TTS**: Text-to-speech synthesis using Fish Audio SDK.
-- **Unified Image Generation**: Synchronous and asynchronous image generation through APIMart, ToAPIs, Google Gemini, or xAI.
+- **Unified Image Generation**: Synchronous and asynchronous image generation through Alibaba Cloud, Ark, APIMart, ToAPIs, Google Gemini, or xAI.
 - **Image Stitching**: Utility to stitch multiple images vertically or horizontally.
 
 This service exposes these capabilities via simple RESTful endpoints, returning base64-encoded results.
@@ -83,11 +83,11 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
 
 - **GET** `/v1/images/models`
 - Returns the built-in image provider/model catalog. `updated_at` identifies the
-  catalog snapshot date; the current data is updated through `2026-08-31`.
+  catalog snapshot date; the current data is updated through `2026-09-01`.
 - Response:
   ```json
   {
-    "updated_at": "2026-08-31",
+    "updated_at": "2026-09-01",
     "providers": [
       {
         "provider": "apimart",
@@ -95,7 +95,7 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
       },
       {
         "provider": "ark",
-        "models": ["doubao-seedream-5-0-pro", "doubao-seedream-4-0-250828"],
+        "models": ["doubao-seedream-5-0-260128", "doubao-seedream-5-0-lite-260128", "doubao-seedream-4-5-251128", "doubao-seedream-4-0-250828"],
         "note": "Ark Endpoint IDs are also accepted and may be used instead of public Model IDs."
       }
     ]
@@ -130,6 +130,9 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
   endpoint hides these differences, waits when necessary, downloads the final
   image, and returns the same response format for every provider. Ark requests
   `b64_json` directly from Seedream and therefore does not need a result download.
+  xAI also requests `b64_json` so deployments do not depend on access to its
+  temporary image CDN. If `size` is omitted, ToAPIs receives no size field and
+  applies its model-specific default.
 
 - Base64 response (`return_url=false`):
   ```json
@@ -162,11 +165,15 @@ and documented combinations are:
 | Provider | Models |
 | :--- | :--- |
 | `aliyun` | `qwen-image-3.0-pro`, `qwen-image-3.0`, `wan2.7-image-pro`, other `wan*` image models, and `z-image-turbo` |
-| `ark` | Ark Model IDs or Endpoint IDs for Doubao Seedream 5.0 Pro/Lite, Seedream 4.5, and Seedream 4.0 |
+| `ark` | `doubao-seedream-5-0-260128`, `doubao-seedream-5-0-lite-260128`, `doubao-seedream-4-5-251128`, `doubao-seedream-4-0-250828`, or an enabled Ark Endpoint ID |
 | `apimart` | `gpt-image-2`, `gemini-3.1-flash-image-preview`, `gemini-3-pro-image-preview` and their APIMart aliases |
 | `toapis` | `gpt-image-2`, `gemini-3.1-flash-image-preview`, `gemini-3-pro-image-preview` |
 | `gemini` | Google image-capable Gemini model identifiers, such as `gemini-3-pro-image-preview` |
-| `xai` | xAI image model identifiers, such as `grok-imagine-image` |
+| `xai` | `grok-imagine-image-2.0` (preferred) or the legacy `grok-imagine-image` alias |
+
+Provider failures from the synchronous endpoint use HTTP `424 Failed
+Dependency` with a JSON `error` body. This keeps the upstream diagnostic
+available through proxies that replace HTTP 502 bodies.
 
 For Alibaba Cloud, set `ALIYUN_API_BASE` to a base URL in the same region and
 workspace as `DASHSCOPE_API_KEY`. For example:

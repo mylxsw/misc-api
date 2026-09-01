@@ -123,7 +123,15 @@ class XAIProvider(ImageProvider):
     name = "xai"
 
     def generate(self, model: str, prompt: str, size: str | None) -> bytes:
-        payload: dict[str, Any] = {"model": model, "prompt": prompt, "n": 1}
+        # Returning the image inline avoids a second request to xAI's temporary
+        # image CDN. Some hosting-provider egress IPs are rejected by that CDN
+        # even though the generation request itself succeeds.
+        payload: dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "n": 1,
+            "response_format": "b64_json",
+        }
         _apply_size(payload, size, ratio_field="aspect_ratio")
         body = self._request_json(
             "POST",
@@ -283,13 +291,10 @@ class AsyncGatewayProvider(ImageProvider, ABC):
     """Shared implementation for OpenAI-like asynchronous image gateways."""
 
     submit_path = "/images/generations"
-    requires_size = False
 
     def generate(self, model: str, prompt: str, size: str | None) -> bytes:
         payload: dict[str, Any] = {"model": model, "prompt": prompt, "n": 1}
         _apply_size(payload, size, ratio_field="size")
-        if self.requires_size and "size" not in payload:
-            payload["size"] = "auto"
         body = self._request_json(
             "POST",
             f"{self.api_base}{self.submit_path}",
@@ -360,7 +365,6 @@ class APIMartProvider(AsyncGatewayProvider):
 
 class ToAPIsProvider(AsyncGatewayProvider):
     name = "toapis"
-    requires_size = True
 
     def _task_id(self, body: dict[str, Any]) -> str | None:
         return body.get("id")
@@ -377,7 +381,7 @@ class ToAPIsProvider(AsyncGatewayProvider):
         return body.get("status"), image_url, _error_message(body)
 
 
-IMAGE_MODEL_CATALOG_UPDATED_AT = "2026-08-31"
+IMAGE_MODEL_CATALOG_UPDATED_AT = "2026-09-01"
 
 IMAGE_MODEL_CATALOG = {
     "aliyun": {
@@ -395,9 +399,9 @@ IMAGE_MODEL_CATALOG = {
     },
     "ark": {
         "models": [
-            "doubao-seedream-5-0-pro",
-            "doubao-seedream-5-0-lite",
-            "doubao-seedream-4-5",
+            "doubao-seedream-5-0-260128",
+            "doubao-seedream-5-0-lite-260128",
+            "doubao-seedream-4-5-251128",
             "doubao-seedream-4-0-250828",
         ],
         "note": "Ark Endpoint IDs are also accepted and may be used instead of public Model IDs.",
@@ -433,8 +437,10 @@ IMAGE_MODEL_CATALOG = {
     },
     "xai": {
         "models": [
+            "grok-imagine-image-2.0",
             "grok-imagine-image",
         ],
+        "note": "grok-imagine-image is retained as a legacy alias; prefer grok-imagine-image-2.0.",
     },
 }
 

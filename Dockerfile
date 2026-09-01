@@ -26,5 +26,7 @@ COPY . .
 
 EXPOSE 8000
 
-# Run with production-grade WSGI server.
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--timeout", "600", "server:create_app()"]
+# Keep slow provider calls from blocking every API request. Image generation
+# should still prefer the async endpoint, but multiple threaded workers keep
+# health/model/task-status requests responsive while synchronous calls run.
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--worker-class", "gthread", "--threads", "4", "--timeout", "600", "server:create_app()"]

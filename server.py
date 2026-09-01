@@ -439,7 +439,16 @@ def image_generation_endpoint():
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except (ImageGenerationError, ObjectStorageError) as exc:
-        return jsonify({"error": str(exc)}), 502
+        app.logger.warning(
+            "Image generation dependency failed provider=%s model=%s: %s",
+            params[0] if "params" in locals() else "unknown",
+            params[1] if "params" in locals() else "unknown",
+            exc,
+        )
+        # Cloudflare replaces many origin 502 response bodies with a generic
+        # plain-text page. 424 preserves the structured provider error while
+        # still identifying the failure as an upstream dependency problem.
+        return jsonify({"error": str(exc)}), 424
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -453,6 +462,12 @@ def process_image_generation_task(task_id, provider, model, prompt, size, return
             "task_id": task_id,
         }
     except Exception as exc:
+        app.logger.exception(
+            "Image generation task failed task_id=%s provider=%s model=%s",
+            task_id,
+            provider,
+            model,
+        )
         task_info = {
             "status": "failed",
             "error": str(exc),

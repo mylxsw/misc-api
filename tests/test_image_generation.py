@@ -26,7 +26,10 @@ class ImageProviderTests(unittest.TestCase):
             "data": [{"b64_json": base64.b64encode(IMAGE).decode()}]
         })
 
-        self.assertEqual(provider.generate("doubao-seedream-5-0-lite", "cat", "16:9"), IMAGE)
+        self.assertEqual(
+            provider.generate("doubao-seedream-5-0-lite-260128", "cat", "16:9"),
+            IMAGE,
+        )
         call = provider._request_json.call_args
         self.assertEqual(call.args[1], "https://ark.example/api/v3/images/generations")
         self.assertEqual(call.kwargs["json"]["size"], "2848x1600")
@@ -104,6 +107,7 @@ class ImageProviderTests(unittest.TestCase):
         self.assertEqual(provider.generate("grok-image", "cat", "2k"), IMAGE)
         payload = provider._request_json.call_args.kwargs["json"]
         self.assertEqual(payload["resolution"], "2k")
+        self.assertEqual(payload["response_format"], "b64_json")
         self.assertNotIn("aspect_ratio", payload)
 
     @patch("lib.image_generation.time.sleep")
@@ -134,14 +138,14 @@ class ImageProviderTests(unittest.TestCase):
         ])
         provider._download_image = Mock(return_value=IMAGE)
 
-        self.assertEqual(provider.generate("gemini-model", "cat", "4K"), IMAGE)
+        self.assertEqual(provider.generate("gemini-model", "cat", None), IMAGE)
         submit = provider._request_json.call_args_list[0]
-        self.assertEqual(submit.kwargs["json"]["resolution"], "4K")
-        self.assertEqual(submit.kwargs["json"]["size"], "auto")
+        self.assertNotIn("resolution", submit.kwargs["json"])
+        self.assertNotIn("size", submit.kwargs["json"])
 
     def test_model_catalog_covers_every_provider(self):
         catalog = get_image_model_catalog()
-        self.assertEqual(catalog["updated_at"], "2026-08-31")
+        self.assertEqual(catalog["updated_at"], "2026-09-01")
         providers = {item["provider"]: item for item in catalog["providers"]}
         self.assertEqual(
             set(providers),
@@ -149,7 +153,15 @@ class ImageProviderTests(unittest.TestCase):
         )
         self.assertIn("qwen-image-3.0-pro", providers["aliyun"]["models"])
         self.assertIn("gpt-image-2", providers["apimart"]["models"])
-        self.assertIn("grok-imagine-image", providers["xai"]["models"])
+        self.assertEqual(
+            providers["ark"]["models"][:3],
+            [
+                "doubao-seedream-5-0-260128",
+                "doubao-seedream-5-0-lite-260128",
+                "doubao-seedream-4-5-251128",
+            ],
+        )
+        self.assertIn("grok-imagine-image-2.0", providers["xai"]["models"])
 
     def test_unknown_provider_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "unsupported provider"):

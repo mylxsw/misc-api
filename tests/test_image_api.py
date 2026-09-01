@@ -2,6 +2,7 @@ import base64
 import unittest
 from unittest.mock import Mock, patch
 
+from lib.image_generation import ImageGenerationError
 from server import app
 
 
@@ -12,7 +13,7 @@ class ImageAPIModelsTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_json()
-        self.assertEqual(body["updated_at"], "2026-08-31")
+        self.assertEqual(body["updated_at"], "2026-09-01")
         self.assertEqual(len(body["providers"]), 6)
         self.assertTrue(all(item["models"] for item in body["providers"]))
 
@@ -62,6 +63,18 @@ class ImageAPIModelsTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("must be a boolean", response.get_json()["error"])
+
+    @patch("server.generate_image", side_effect=ImageGenerationError("provider detail"))
+    def test_provider_error_preserves_json_body_without_using_502(self, _generate):
+        with app.test_client() as client:
+            response = client.post("/v1/images/generations", json={
+                "provider": "xai",
+                "model": "model",
+                "prompt": "cat",
+            })
+
+        self.assertEqual(response.status_code, 424)
+        self.assertEqual(response.get_json(), {"error": "provider detail"})
 
 
 if __name__ == "__main__":
