@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import base64
+import binascii
+import ipaddress
 import os
 import random
+import socket
 import time
 from abc import ABC, abstractmethod
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -19,6 +22,10 @@ DEFAULT_TIMEOUT = 120
 DEFAULT_MAX_WAIT = 300
 DEFAULT_POLL_INTERVAL = 5.0
 MAX_IMAGE_BYTES = 32 * 1024 * 1024
+MAX_INPUT_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_INPUT_IMAGE_BASE64_CHARS = ((MAX_INPUT_IMAGE_BYTES + 2) // 3) * 4
+MAX_INPUT_IMAGES = 3
+MAX_IMAGE_REDIRECTS = 3
 
 
 class ImageGenerationError(RuntimeError):
@@ -36,7 +43,13 @@ class ImageProvider(ABC):
         self.session = _create_session()
 
     @abstractmethod
-    def generate(self, model: str, prompt: str, size: str | None) -> bytes:
+    def generate(
+        self,
+        model: str,
+        prompt: str,
+        size: str | None,
+        images: list[str] | None = None,
+    ) -> bytes:
         raise NotImplementedError
 
     def _request_json(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
@@ -87,22 +100,45 @@ class ImageProvider(ABC):
             raise ImageGenerationError(f"{self.name} returned an empty image")
         return image
 
+    def _inline_image(self, source: str) -> dict[str, Any]:
+        data, mime_type = _load_input_image(self.session, source, self.name)
+        return {
+            "inline_data": {
+                "mime_type": mime_type,
+                "data": base64.b64encode(data).decode("ascii"),
+            }
+        }
+
 
 class GeminiProvider(ImageProvider):
     name = "gemini"
 
-    def generate(self, model: str, prompt: str, size: str | None) -> bytes:
+    def generate(
+        self,
+        model: str,
+        prompt: str,
+        size: str | None,
+        images: list[str] | None = None,
+    ) -> bytes:
+        images = images or []
         generation_config: dict[str, Any] = {"responseModalities": ["TEXT", "IMAGE"]}
         image_config = _gemini_size(size)
         if image_config:
             generation_config["imageConfig"] = image_config
+
+        instruction = (
+            f"Edit or generate an image using the provided reference image(s): {prompt}"
+            if images
+            else f"Generate an image: {prompt}"
+        )
+        parts = [{"text": instruction}, *(self._inline_image(image) for image in images)]
 
         body = self._request_json(
             "POST",
             f"{self.api_base}/v1beta/models/{quote(model, safe='')}:generateContent",
             params={"key": self.api_key},
             json={
-                "contents": [{"parts": [{"text": f"Generate an image: {prompt}"}]}],
+                "contents": [{"parts": parts}],
                 "generationConfig": generation_config,
             },
         )
@@ -122,7 +158,14 @@ class GeminiProvider(ImageProvider):
 class XAIProvider(ImageProvider):
     name = "xai"
 
-    def generate(self, model: str, prompt: str, size: str | None) -> bytes:
+    def generate(
+        self,
+        model: str,
+        prompt: str,
+        size: str | None,
+        images: list[str] | None = None,
+    ) -> bytes:
+        images = images or []
         # Returning the image inline avoids a second request to xAI's temporary
         # image CDN. Some hosting-provider egress IPs are rejected by that CDN
         # even though the generation request itself succeeds.
@@ -133,9 +176,17 @@ class XAIProvider(ImageProvider):
             "response_format": "b64_json",
         }
         _apply_size(payload, size, ratio_field="aspect_ratio")
+        path = "/images/generations"
+        if images:
+            path = "/images/edits"
+            image_items = [{"type": "image_url", "url": image} for image in images]
+            if len(image_items) == 1:
+                payload["image"] = image_items[0]
+            else:
+                payload["images"] = image_items
         body = self._request_json(
             "POST",
-            f"{self.api_base}/images/generations",
+            f"{self.api_base}{path}",
             headers={"Authorization": f"Bearer {self.api_key}"},
             json=payload,
         )
@@ -154,7 +205,14 @@ class XAIProvider(ImageProvider):
 class ArkProvider(ImageProvider):
     name = "ark"
 
-    def generate(self, model: str, prompt: str, size: str | None) -> bytes:
+    def generate(
+        self,
+        model: str,
+        prompt: str,
+        size: str | None,
+        images: list[str] | None = None,
+    ) -> bytes:
+        images = images or []
         payload: dict[str, Any] = {
             "model": model,
             "prompt": prompt,
@@ -164,6 +222,8 @@ class ArkProvider(ImageProvider):
         mapped_size = _ark_size(size)
         if mapped_size:
             payload["size"] = mapped_size
+        if images:
+            payload["image"] = images
 
         body = self._request_json(
             "POST",
@@ -186,21 +246,36 @@ class AliyunProvider(ImageProvider):
     name = "aliyun"
     synchronous_prefixes = ("qwen-image", "z-image")
 
-    def generate(self, model: str, prompt: str, size: str | None) -> bytes:
+    def generate(
+        self,
+        model: str,
+        prompt: str,
+        size: str | None,
+        images: list[str] | None = None,
+    ) -> bytes:
+        images = images or []
+        if images and (
+            model.startswith("z-image") or model == "wan2.5-t2i-preview"
+        ):
+            raise ImageGenerationError(
+                f"aliyun model {model} does not support input images"
+            )
         if model.startswith(self.synchronous_prefixes):
-            return self._generate_synchronously(model, prompt, size)
+            return self._generate_synchronously(model, prompt, size, images)
         if model.startswith("wan"):
-            return self._generate_asynchronously(model, prompt, size)
+            return self._generate_asynchronously(model, prompt, size, images)
         raise ImageGenerationError(
             "unsupported aliyun image model; expected a qwen-image, wan, or z-image model"
         )
 
-    def _generate_synchronously(self, model: str, prompt: str, size: str | None) -> bytes:
+    def _generate_synchronously(
+        self, model: str, prompt: str, size: str | None, images: list[str]
+    ) -> bytes:
         body = self._request_json(
             "POST",
             f"{self.api_base}/services/aigc/multimodal-generation/generation",
             headers={"Authorization": f"Bearer {self.api_key}"},
-            json=self._payload(model, prompt, size),
+            json=self._payload(model, prompt, size, images),
         )
         self._raise_api_error(body)
         image_url = self._image_url(body)
@@ -208,7 +283,9 @@ class AliyunProvider(ImageProvider):
             raise ImageGenerationError("aliyun response contains no generated image")
         return self._download_image(image_url)
 
-    def _generate_asynchronously(self, model: str, prompt: str, size: str | None) -> bytes:
+    def _generate_asynchronously(
+        self, model: str, prompt: str, size: str | None, images: list[str]
+    ) -> bytes:
         body = self._request_json(
             "POST",
             f"{self.api_base}/services/aigc/image-generation/generation",
@@ -216,7 +293,7 @@ class AliyunProvider(ImageProvider):
                 "Authorization": f"Bearer {self.api_key}",
                 "X-DashScope-Async": "enable",
             },
-            json=self._payload(model, prompt, size),
+            json=self._payload(model, prompt, size, images),
         )
         self._raise_api_error(body)
         output = body.get("output") or {}
@@ -254,17 +331,21 @@ class AliyunProvider(ImageProvider):
         raise ImageGenerationError(f"aliyun generation timed out after {max_wait:g} seconds")
 
     @staticmethod
-    def _payload(model: str, prompt: str, size: str | None) -> dict[str, Any]:
+    def _payload(
+        model: str, prompt: str, size: str | None, images: list[str] | None = None
+    ) -> dict[str, Any]:
         parameters: dict[str, Any] = {"n": 1}
         mapped_size = _aliyun_size(model, size)
         if mapped_size:
             parameters["size"] = mapped_size
+        content = [{"image": image} for image in (images or [])]
+        content.append({"text": prompt})
         return {
             "model": model,
             "input": {
                 "messages": [{
                     "role": "user",
-                    "content": [{"text": prompt}],
+                    "content": content,
                 }]
             },
             "parameters": parameters,
@@ -292,9 +373,25 @@ class AsyncGatewayProvider(ImageProvider, ABC):
 
     submit_path = "/images/generations"
 
-    def generate(self, model: str, prompt: str, size: str | None) -> bytes:
+    input_images_field = "image_urls"
+    public_image_urls_only = False
+
+    def generate(
+        self,
+        model: str,
+        prompt: str,
+        size: str | None,
+        images: list[str] | None = None,
+    ) -> bytes:
+        images = images or []
+        if self.public_image_urls_only and any(not _is_http_url(image) for image in images):
+            raise ImageGenerationError(
+                f"{self.name} input images must use public http(s) URLs"
+            )
         payload: dict[str, Any] = {"model": model, "prompt": prompt, "n": 1}
         _apply_size(payload, size, ratio_field="size")
+        if images:
+            payload[self.input_images_field] = images
         body = self._request_json(
             "POST",
             f"{self.api_base}{self.submit_path}",
@@ -365,6 +462,7 @@ class APIMartProvider(AsyncGatewayProvider):
 
 class ToAPIsProvider(AsyncGatewayProvider):
     name = "toapis"
+    public_image_urls_only = True
 
     def _task_id(self, body: dict[str, Any]) -> str | None:
         return body.get("id")
@@ -482,8 +580,20 @@ def get_provider(name: str) -> ImageProvider:
     return provider_class(os.getenv(key_env, ""), os.getenv(base_env, default_base))
 
 
-def generate_image(provider: str, model: str, prompt: str, size: str | None = None) -> bytes:
-    return get_provider(provider).generate(model=model, prompt=prompt, size=size)
+def generate_image(
+    provider: str,
+    model: str,
+    prompt: str,
+    size: str | None = None,
+    images: list[str] | None = None,
+) -> bytes:
+    normalized_images = normalize_input_images(images)
+    return get_provider(provider).generate(
+        model=model,
+        prompt=prompt,
+        size=size,
+        images=normalized_images,
+    )
 
 
 def _create_session() -> requests.Session:
@@ -511,6 +621,177 @@ def _apply_size(payload: dict[str, Any], size: str | None, ratio_field: str) -> 
         payload["resolution"] = size
     else:
         payload[ratio_field] = size
+
+
+def normalize_input_images(images: list[str] | None) -> list[str]:
+    """Validate and canonicalize unified input image references.
+
+    Public HTTP(S) URLs are preserved. Base64 data URIs and bare Base64 are
+    validated, size-limited, and converted to canonical data URIs so every
+    provider receives an explicit MIME type.
+    """
+    if images is None:
+        return []
+    if not isinstance(images, list):
+        raise ImageGenerationError("input images must be an array")
+    if not images:
+        return []
+    if len(images) > MAX_INPUT_IMAGES:
+        raise ImageGenerationError(
+            f"at most {MAX_INPUT_IMAGES} input images are supported"
+        )
+
+    normalized = []
+    for index, source in enumerate(images, start=1):
+        if not isinstance(source, str) or not source.strip():
+            raise ImageGenerationError(f"input image {index} must be a non-empty string")
+        source = source.strip()
+        if _is_http_url(source):
+            if len(source) > 8192:
+                raise ImageGenerationError(f"input image {index} URL is too long")
+            normalized.append(source)
+            continue
+
+        encoded = source
+        if source.startswith("data:"):
+            header, separator, encoded = source.partition(",")
+            if not separator or ";base64" not in header.lower():
+                raise ImageGenerationError(
+                    f"input image {index} must use a base64 data URI"
+                )
+        if len(encoded) > MAX_INPUT_IMAGE_BASE64_CHARS:
+            raise ImageGenerationError(f"input image {index} exceeds the 20 MB limit")
+        try:
+            data = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ImageGenerationError(
+                f"input image {index} is not a valid URL or base64 image"
+            ) from exc
+        mime_type = _input_image_mime_type(data)
+        if not mime_type:
+            raise ImageGenerationError(f"input image {index} has an unsupported format")
+        if len(data) > MAX_INPUT_IMAGE_BYTES:
+            raise ImageGenerationError(f"input image {index} exceeds the 20 MB limit")
+        normalized.append(
+            f"data:{mime_type};base64,{base64.b64encode(data).decode('ascii')}"
+        )
+    return normalized
+
+
+def _is_http_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+
+
+def _input_image_mime_type(data: bytes) -> str | None:
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:6] in {b"GIF87a", b"GIF89a"}:
+        return "image/gif"
+    if data[:2] == b"BM":
+        return "image/bmp"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:4] in {b"II*\x00", b"MM\x00*"}:
+        return "image/tiff"
+    return None
+
+
+def _validate_public_image_url(url: str, provider: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ImageGenerationError(f"{provider} input image URL is invalid")
+    if parsed.username or parsed.password:
+        raise ImageGenerationError(f"{provider} input image URL must not contain credentials")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ImageGenerationError(f"{provider} input image URL has an invalid port") from exc
+    if port not in {None, 80, 443}:
+        raise ImageGenerationError(
+            f"{provider} input image URL must use port 80 or 443"
+        )
+    effective_port = port or (443 if parsed.scheme == "https" else 80)
+    try:
+        addresses = socket.getaddrinfo(parsed.hostname, effective_port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise ImageGenerationError(
+            f"{provider} input image host could not be resolved"
+        ) from exc
+    if not addresses:
+        raise ImageGenerationError(f"{provider} input image host could not be resolved")
+    for address in addresses:
+        ip = ipaddress.ip_address(address[4][0])
+        if not ip.is_global:
+            raise ImageGenerationError(
+                f"{provider} input image URL must resolve to a public address"
+            )
+
+
+def _load_input_image(
+    session: requests.Session, source: str, provider: str
+) -> tuple[bytes, str]:
+    if not _is_http_url(source):
+        _, _, encoded = source.partition(",")
+        try:
+            data = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ImageGenerationError(f"{provider} input image has invalid base64 data") from exc
+        mime_type = _input_image_mime_type(data)
+        if not mime_type:
+            raise ImageGenerationError(f"{provider} input image has an unsupported format")
+        return data, mime_type
+
+    current_url = source
+    for redirect_count in range(MAX_IMAGE_REDIRECTS + 1):
+        _validate_public_image_url(current_url, provider)
+        try:
+            response = session.get(
+                current_url,
+                timeout=DEFAULT_TIMEOUT,
+                stream=True,
+                allow_redirects=False,
+            )
+            if response.is_redirect or response.is_permanent_redirect:
+                if redirect_count >= MAX_IMAGE_REDIRECTS:
+                    raise ImageGenerationError(
+                        f"{provider} input image exceeded the redirect limit"
+                    )
+                location = response.headers.get("Location")
+                if not location:
+                    raise ImageGenerationError(
+                        f"{provider} input image redirect has no location"
+                    )
+                current_url = urljoin(current_url, location)
+                continue
+            response.raise_for_status()
+            content_length = int(response.headers.get("Content-Length", "0") or 0)
+            if content_length > MAX_INPUT_IMAGE_BYTES:
+                raise ImageGenerationError(f"{provider} input image exceeds the 20 MB limit")
+            chunks = []
+            total = 0
+            for chunk in response.iter_content(64 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > MAX_INPUT_IMAGE_BYTES:
+                    raise ImageGenerationError(
+                        f"{provider} input image exceeds the 20 MB limit"
+                    )
+                chunks.append(chunk)
+        except requests.RequestException as exc:
+            raise ImageGenerationError(
+                f"failed to download {provider} input image: {exc}"
+            ) from exc
+        data = b"".join(chunks)
+        mime_type = _input_image_mime_type(data)
+        if not mime_type:
+            raise ImageGenerationError(f"{provider} input image has an unsupported format")
+        return data, mime_type
+
+    raise ImageGenerationError(f"{provider} input image could not be downloaded")
 
 
 ARK_2K_RATIOS = {

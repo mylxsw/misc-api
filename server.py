@@ -41,6 +41,7 @@ from lib.image_generation import (
     generate_image,
     get_image_model_catalog,
     get_provider,
+    normalize_input_images,
 )
 from lib.object_storage import ObjectStorageError, S3ImageStorage
 
@@ -394,6 +395,7 @@ def _parse_image_generation_payload(payload):
     model = (payload.get("model") or "").strip()
     prompt = (payload.get("prompt") or "").strip()
     size = payload.get("size")
+    images = payload.get("images")
     return_url = payload.get("return_url", False)
 
     if not provider:
@@ -404,15 +406,27 @@ def _parse_image_generation_payload(payload):
         raise ValueError("parameter 'prompt' is required")
     if size is not None and (not isinstance(size, str) or not size.strip()):
         raise ValueError("parameter 'size' must be a non-empty string")
+    if images is not None and not isinstance(images, list):
+        raise ValueError("parameter 'images' must be an array of image references")
+    try:
+        images = normalize_input_images(images)
+    except ImageGenerationError as exc:
+        raise ValueError(str(exc)) from exc
     if not isinstance(return_url, bool):
         raise ValueError("parameter 'return_url' must be a boolean")
-    return provider, model, prompt, size.strip() if size else None, return_url
+    return provider, model, prompt, size.strip() if size else None, images, return_url
 
 
-def _generate_image_response(provider, model, prompt, size, return_url):
+def _generate_image_response(provider, model, prompt, size, images, return_url):
     # Validate storage before generating a billable image.
     storage = S3ImageStorage.from_env() if return_url else None
-    image = generate_image(provider=provider, model=model, prompt=prompt, size=size)
+    image = generate_image(
+        provider=provider,
+        model=model,
+        prompt=prompt,
+        size=size,
+        images=images,
+    )
     result = {
         "provider": provider,
         "model": model,
@@ -453,11 +467,11 @@ def image_generation_endpoint():
         return jsonify({"error": str(exc)}), 500
 
 
-def process_image_generation_task(task_id, provider, model, prompt, size, return_url):
+def process_image_generation_task(task_id, provider, model, prompt, size, images, return_url):
     try:
         task_info = {
             "status": "success",
-            **_generate_image_response(provider, model, prompt, size, return_url),
+            **_generate_image_response(provider, model, prompt, size, images, return_url),
             "created_at": time.time(),
             "task_id": task_id,
         }
@@ -483,7 +497,7 @@ def process_image_generation_task(task_id, provider, model, prompt, size, return
 def async_image_generation_endpoint():
     """Create a local image generation task and return immediately."""
     try:
-        provider, model, prompt, size, return_url = _parse_image_generation_payload(
+        provider, model, prompt, size, images, return_url = _parse_image_generation_payload(
             request.get_json(silent=True) or {}
         )
         # Validate provider and storage configuration before accepting a task.
@@ -507,7 +521,7 @@ def async_image_generation_endpoint():
     redis_client.setex(f"{IMAGE_TASK_PREFIX}{task_id}", REDIS_TTL, json.dumps(task_info))
     thread = threading.Thread(
         target=process_image_generation_task,
-        args=(task_id, provider, model, prompt, size, return_url),
+        args=(task_id, provider, model, prompt, size, images, return_url),
         daemon=True,
     )
     thread.start()

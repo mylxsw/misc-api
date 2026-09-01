@@ -113,6 +113,7 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
   | `model` | string | Yes | Provider-specific model identifier |
   | `prompt` | string | Yes | Image description |
   | `size` | string | No | Resolution (`1K`, `2K`, `4K`) or aspect ratio (`1:1`, `16:9`, etc.) |
+  | `images` | string[] | No | One to three input images for editing/reference generation; each item is a public URL, Base64 data URI, or bare Base64 |
   | `return_url` | boolean | No | Upload to configured S3/R2 storage and return `image_url` instead of Base64 (default `false`) |
 
   ```json
@@ -124,6 +125,28 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
     "return_url": false
   }
   ```
+
+  Image-to-image request:
+
+  ```json
+  {
+    "provider": "ark",
+    "model": "doubao-seedream-4-5-251128",
+    "prompt": "保留主体和构图，把画面转换成水彩插画风格",
+    "images": [
+      "https://cdn.example/reference.jpg"
+    ],
+    "size": "1:1",
+    "return_url": true
+  }
+  ```
+
+  `images` is also supported by the asynchronous endpoint. Base64 input is
+  canonicalized to `data:<mime>;base64,...` after validating the image format
+  and a 20 MB per-image limit. For security, Gemini only downloads URLs that
+  resolve to public addresses on port 80 or 443. ToAPIs currently accepts only
+  public HTTP(S) URLs for `image_urls`. Alibaba Cloud `z-image-turbo` and
+  `wan2.5-t2i-preview` are text-to-image only and reject `images`.
 
   APIMart and ToAPIs are asynchronous upstream services. Alibaba Cloud Wan
   models are asynchronous, while Qwen Image and Z-Image are synchronous. This

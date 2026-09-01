@@ -1,6 +1,6 @@
 # 图片生成 API 来源文档
 
-> 最后核对日期：2026-08-31
+> 最后核对日期：2026-09-01
 
 本文集中记录统一图片生成 API 所接入服务的来源文档、协议差异和项目实现位置，便于故障排查、二次接入及后续升级。
 
@@ -24,7 +24,31 @@
 - `tests/test_image_api.py`：统一 HTTP API 测试。
 - `tests/test_object_storage.py`：S3/R2 存储测试。
 
-统一请求目前只公开 `provider`、`model`、`prompt`、`size` 和 `return_url`。不同上游的 `size` 语义由适配器转换。生成结果默认返回 `image_base64`；`return_url=true` 时上传 R2 并返回 `image_url`。
+统一请求公开 `provider`、`model`、`prompt`、`size`、`images` 和 `return_url`。`images` 为可选数组，支持 1–3 个公网 URL、Base64 data URI 或裸 Base64，用于图像编辑、多图融合和参考生成。Base64 输入会校验图片格式及 20 MB 单图上限，并统一转换为带 MIME 类型的 data URI。不同上游的 `size` 和输入图片字段由适配器转换。生成结果默认返回 `image_base64`；`return_url=true` 时上传 R2 并返回 `image_url`。
+
+图生图沿用现有两个生成入口，不增加独立路由：
+
+```json
+{
+  "provider": "ark",
+  "model": "doubao-seedream-4-5-251128",
+  "prompt": "保留主体和构图，转换成水彩插画风格",
+  "images": ["https://cdn.example/reference.jpg"],
+  "size": "1:1",
+  "return_url": true
+}
+```
+
+Provider 映射如下：
+
+| Provider | 上游图生图协议 | 统一接口限制 |
+| :--- | :--- | :--- |
+| `gemini` | `contents[].parts[].inlineData` | URL 由服务端安全下载后转 Base64；拒绝内网地址和非 80/443 端口 |
+| `xai` | `POST /images/edits`，单图用 `image`，多图用 `images` | URL、data URI、裸 Base64 |
+| `ark` | `POST /images/generations` 的 `image` 数组 | URL、data URI、裸 Base64 |
+| `aliyun` | `messages[].content[].image`，图片位于文本指令前 | Qwen、Wan 2.7/2.6 支持；Z-Image 和 `wan2.5-t2i-preview` 不支持 |
+| `apimart` | `image_urls` | URL、data URI、裸 Base64 |
+| `toapis` | `image_urls`（GPT-Image 会在上游归一化为 `reference_images`） | 上游当前只接受公网 URL |
 
 ## Provider 总览
 
@@ -52,6 +76,8 @@
 - Endpoint：`POST {GEMINI_API_BASE}/v1beta/models/{model}:generateContent`
 - 鉴权：Query 参数 `key`，项目中来自 `GEMINI_API_KEY`。
 - 响应图片：`candidates[0].content.parts[].inlineData.data`。
+- 图生图：统一 `images` 会转换成 `parts[].inlineData`；URL 由服务端下载并转换，Base64 直接解码后重新编码。
+- 为防止服务端请求伪造，Gemini URL 输入只允许解析到公网地址的 HTTP(S) URL、80/443 端口，并逐次校验重定向目标。
 - `size` 为分辨率时映射到 `generationConfig.imageConfig.imageSize`；宽高比映射到 `aspectRatio`。
 - 当前目录快照包含 `gemini-3.1-flash-image-preview`、`gemini-3-pro-image-preview`。实际可用模型取决于 API Key、地域和 Google 的模型生命周期。
 
@@ -68,7 +94,9 @@
 - Endpoint：`POST {X_AI_API_BASE}/images/generations`
 - 鉴权：`Authorization: Bearer {X_AI_API_KEY}`。
 - 响应兼容 `data[0].b64_json` 和 `data[0].url`。
-- 当前已验证模型：`grok-imagine-image`。
+- 文生图使用 `/images/generations`；存在 `images` 时切换到 JSON 协议的 `/images/edits`。
+- 单张输入映射为 `image={type,url}`，多张输入映射为 `images=[...]`；请求继续指定 `response_format=b64_json`，避免生产环境二次访问临时 CDN。
+- 当前首选模型：`grok-imagine-image-2.0`；保留 `grok-imagine-image` 兼容别名。
 - 分辨率映射为 `resolution`，宽高比映射为 `aspect_ratio`。
 
 ## 火山引擎方舟 Ark
@@ -85,6 +113,7 @@
 
 - 鉴权：`Authorization: Bearer {ARK_API_KEY}`。
 - 请求固定使用 `response_format=b64_json`、`watermark=false`，避免再次下载临时 URL。
+- 图生图将统一 `images` 原样映射为上游 `image` 数组；Ark 支持 URL 和 Base64 data URI。
 - 如果上游返回 `data[0].url`，项目仍会下载并转换。
 - `model` 可使用已开通的 Model ID 或 Ark Endpoint ID。
 - 对接范围：Doubao Seedream 5.0 Pro、Seedream 5.0 Lite、Seedream 4.5、Seedream 4.0。
@@ -136,6 +165,9 @@ GET {ALIYUN_API_BASE}/tasks/{task_id}
 - 鉴权：`Authorization: Bearer {DASHSCOPE_API_KEY}`。
 - 任务成功状态为 `SUCCEEDED`；失败终态包括 `FAILED`、`CANCELED`、`UNKNOWN`。
 - 图片 URL 位于 `output.choices[0].message.content[].image`，有效期通常为 24 小时，项目会立即下载。
+- Qwen Image 和 Wan 图生图会把每个输入转换为 `messages[0].content` 中的 `{"image": "..."}`，再追加唯一的 `{"text": "..."}` 指令。
+- 统一接口最多输入 3 张图；这符合 Qwen Image 的上限。Wan 上游允许更多输入，但统一接口当前保持跨 provider 一致。
+- `z-image-turbo` 和 `wan2.5-t2i-preview` 仅支持文生图，传入 `images` 时适配器会在计费调用前拒绝。
 - API Key、模型和 `ALIYUN_API_BASE` 必须属于同一地域及 Workspace。
 - Workspace 专属域名优先于公共 DashScope 域名。
 - 已真实验证：`qwen-image-3.0-pro`。
@@ -164,6 +196,7 @@ GET  {APIMART_API_BASE}/tasks/{task_id}
 - 成功状态：`data.status=completed`。
 - 图片 URL：`data.result.images[0].url[0]`。
 - 已真实验证：`gpt-image-2`。
+- 图生图使用 `image_urls`，支持公网 URL 和 Base64 data URI 混合输入。
 - 兼容文档中的 GPT-Image 和 Nano Banana 模型别名；目录详见 `GET /v1/images/models`。
 
 ## ToAPIs
@@ -189,7 +222,8 @@ GET  {TOAPIS_API_BASE}/images/generations/{task_id}
 - 创建响应任务 ID：顶层 `id`。
 - 任务状态：`queued`、`in_progress`、`completed`、`failed`。
 - 图片 URL：`result.data[0].url`，通常有效 24 小时。
-- `gpt-image-2` 即使指定了 `resolution` 仍要求 `size`；统一参数只有分辨率时，适配器会补充 `size=auto`。
+- 图生图统一发送 `image_urls`，兼容 Gemini/Nano Banana；GPT-Image 会由 ToAPIs 归一化为 `reference_images`。ToAPIs 已停止在这些字段中接收 Base64，因此统一接口会提前拒绝非 HTTP(S) 输入。
+- 未指定 `size` 时不发送该字段，由模型采用自身默认值；不会补充不兼容的 `size=auto`。
 - 已真实验证：`gpt-image-2`，API Base 使用 `https://toapis.xyz/v1`。
 
 ## Cloudflare R2 / S3
