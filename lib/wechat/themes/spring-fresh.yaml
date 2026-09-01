@@ -1,0 +1,257 @@
+name: "spring-fresh"
+description: "春日清新风格：自然鼠尾草绿、胶囊标题与柔和圆角，适合生活方式、健康和自然主题内容"
+colors:
+  primary: "#6b9b7a"
+  secondary: "#86ad92"
+  text: "#34433a"
+  text_light: "#708077"
+  background: "#ffffff"
+  code_bg: "#f2f7f3"
+  code_color: "#50775d"
+  quote_border: "#6b9b7a"
+  quote_bg: "#f2f7f3"
+  reference_border: "#6b9b7a"
+  reference_bg: "#f1f6f2"
+  reference_text: "#202521"
+  reference_radius: "14px"
+  border_radius: "12px"
+  darkmode:
+    background: "#1b211d"
+    text: "#d6e0d8"
+    text_light: "#a1afa5"
+    primary: "#91bea0"
+    code_bg: "#252e28"
+    code_color: "#b8d5c0"
+    quote_bg: "#253029"
+    quote_border: "#91bea0"
+base_css: |
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-size: 16px;
+    line-height: 1.78;
+    color: #34433a;
+    background: #ffffff;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 20px;
+    word-wrap: break-word;
+  }
+
+  h1 {
+    display: table;
+    font-size: 26px;
+    font-weight: 700;
+    line-height: 1.4;
+    letter-spacing: 0.03em;
+    text-align: center;
+    color: #6b9b7a;
+    margin: 32px auto 18.4px;
+    padding: 4px 6.4px;
+    border-bottom: 1px dashed #cbdcd0;
+  }
+
+  h2 {
+    display: table;
+    font-size: 21px;
+    font-weight: 700;
+    line-height: 1.5;
+    letter-spacing: 0.03em;
+    text-align: center;
+    color: #ffffff;
+    background: #6b9b7a;
+    margin: 36.8px auto 18.4px;
+    padding: 4px 13.6px;
+    border-radius: 999px;
+    box-shadow: 0 4px 14px rgba(107, 155, 122, 0.28);
+  }
+
+  h3 {
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1.5;
+    color: #50745c;
+    background: #f2f6f3;
+    margin: 30.4px 8px 11.2px 0;
+    padding: 4px 12px;
+    border-left: 4px solid #6b9b7a;
+    border-radius: 0 10px 10px 0;
+  }
+
+  h4 {
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.5;
+    color: #6b9b7a;
+    margin: 24px 0 8px;
+  }
+
+  h5 {
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.5;
+    color: #6b9b7a;
+    margin: 22px 0 8px;
+  }
+
+  h6 {
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.5;
+    color: #708077;
+    margin: 22px 0 8px;
+  }
+
+  p {
+    font-size: 16px;
+    line-height: 1.78;
+    letter-spacing: 0.04em;
+    color: #34433a;
+    margin: 18px 8px;
+  }
+
+  strong {
+    font-weight: 700;
+    color: #54795f;
+  }
+
+  em {
+    font-style: italic;
+    color: #526158;
+  }
+
+  blockquote {
+    font-style: italic;
+    color: #526158;
+    background: #f3f7f4;
+    margin: 18px 8px;
+    padding: 16px 19.2px;
+    border-left: 5px solid #6b9b7a;
+    border-radius: 12px;
+    box-shadow: inset 0 0 16px rgba(107, 155, 122, 0.1);
+  }
+
+  blockquote p {
+    color: #526158;
+    margin: 0;
+  }
+
+  code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+    font-size: 14px;
+    color: #50775d;
+    background: #f2f6f3;
+    padding: 3px 6px;
+    border: 1px solid #e4ede7;
+    border-radius: 8px;
+  }
+
+  pre {
+    color: #d9e8dd;
+    background: #26342b;
+    padding: 16px;
+    margin: 18px 8px;
+    border: 1px solid #edf3ef;
+    border-radius: 14px;
+    overflow-x: auto;
+    line-height: 1.6;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.04);
+  }
+
+  pre code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+    font-size: 14px;
+    color: #d9e8dd;
+    background: none;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+  }
+
+  ul {
+    padding-left: 22px;
+    margin: 16px 8px;
+  }
+
+  ol {
+    padding-left: 22px;
+    margin: 16px 8px;
+  }
+
+  li {
+    font-size: 16px;
+    line-height: 1.78;
+    color: #34433a;
+    margin: 7px 0;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    color: #34433a;
+    margin: 16px 8px;
+    border: 1px solid #dde8dd;
+    font-size: 15px;
+  }
+
+  thead {
+    background: #6b9b7a;
+  }
+
+  th {
+    color: #ffffff;
+    background: #6b9b7a;
+    font-weight: 700;
+    text-align: left;
+    padding: 7.2px 12px;
+    border: 1px solid #dde8dd;
+    word-break: keep-all;
+  }
+
+  td {
+    color: #34433a;
+    background: transparent;
+    padding: 7.2px 12px;
+    border: 1px solid #dde8dd;
+    word-break: keep-all;
+  }
+
+  img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: 20px auto 10px;
+    border: 1px solid #edf3ef;
+    border-radius: 14px;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.05);
+  }
+
+  a {
+    color: #6b9b7a;
+    text-decoration: none;
+    font-weight: 500;
+  }
+
+  hr {
+    height: 1px;
+    border: none;
+    background: linear-gradient(90deg, rgba(107, 155, 122, 0), rgba(107, 155, 122, 0.4), rgba(107, 155, 122, 0));
+    margin: 33.6px 0;
+    transform: none;
+    -webkit-transform: none;
+  }
+
+  del {
+    color: #8a978f;
+    text-decoration: line-through;
+  }
+
+  figure {
+    color: #34433a;
+    margin: 20px 8px;
+  }
+
+  figcaption {
+    color: #708077;
+    font-size: 13px;
+    text-align: center;
+  }

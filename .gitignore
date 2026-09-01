@@ -11,3 +11,4 @@ Makefile.local
 .env
 __pycache__/
 *.pyc
+*.egg-info/

@@ -175,6 +175,17 @@ class WeChatConverter:
         """Apply theme CSS rules as inline styles on matching elements."""
         soup = BeautifulSoup(html, "html.parser")
 
+        # Keep styles authored by Markdown extensions/converter preprocessors at
+        # the highest priority, while still allowing later theme rules (for
+        # example ``blockquote p`` after ``p``) to override earlier theme rules.
+        original_properties: dict[int, set[str]] = {}
+        for elem in soup.find_all(True):
+            properties = set()
+            for item in elem.get("style", "").split(";"):
+                if ":" in item:
+                    properties.add(item.split(":", 1)[0].strip())
+            original_properties[id(elem)] = properties
+
         for selector, styles in self._css_rules.items():
             # Skip body — we don't wrap in body tag
             if selector.strip() == "body":
@@ -196,9 +207,11 @@ class WeChatConverter:
                             key, val = item.split(":", 1)
                             style_dict[key.strip()] = val.strip()
 
-                # Add theme styles (existing styles take precedence)
+                # Later theme rules follow CSS source order. Only genuine
+                # pre-existing inline declarations take precedence over them.
+                protected = original_properties.get(id(elem), set())
                 for prop, val in styles.items():
-                    if prop not in style_dict:
+                    if prop not in protected:
                         style_dict[prop] = val
 
                 elem["style"] = "; ".join(f"{k}: {v}" for k, v in style_dict.items())
@@ -422,11 +435,13 @@ class WeChatConverter:
           :::timeline   — vertical timeline with dots
           :::callout    — Obsidian-style callout (tip/warning/info/danger)
           :::quote      — styled pull quote
+          :::reference  — theme-aware reference card
         """
         text = self._process_dialogue(text)
         text = self._process_timeline(text)
         text = self._process_callout(text)
         text = self._process_quote_block(text)
+        text = self._process_reference_block(text)
         text = self._process_highlight(text)
         text = self._process_summary(text)
         return text
@@ -515,6 +530,27 @@ class WeChatConverter:
                     f'"{content}"</section></section>')
 
         return re.sub(r':::quote\n(.*?)\n:::', replace_quote, text, flags=re.DOTALL)
+
+    def _process_reference_block(self, text: str) -> str:
+        """Convert :::reference blocks to theme-aware reference cards."""
+        colors = self._theme.colors
+        border = colors.get("reference_border", colors.get("quote_border", colors.get("primary", "#2563eb")))
+        background = colors.get("reference_bg", colors.get("quote_bg", "#f8f9fa"))
+        text_color = colors.get("reference_text", colors.get("text", "#333333"))
+        radius = colors.get("reference_radius", colors.get("border_radius", "8px"))
+
+        def replace_reference(match):
+            content = match.group(1).strip()
+            return (
+                f'<section style="margin: 24px 8px; padding: 18px 24px; '
+                f'border-left: 5px solid {border}; background: {background}; '
+                f'border-radius: {radius}">'
+                f'<section style="font-size: 18px; line-height: 1.8; letter-spacing: 0.08em; '
+                f'color: {text_color}; font-style: italic">{content}</section>'
+                f'</section>'
+            )
+
+        return re.sub(r':::reference\n(.*?)\n:::', replace_reference, text, flags=re.DOTALL)
 
     # -- AIGC footer --
 

@@ -525,6 +525,37 @@ curl -X POST http://localhost:8000/v1/wechat/markdown/preview \
   -d '{"markdown":"# 标题\n\n正文内容 with English 混排。","theme":"sspai"}'
 ```
 
+#### Command-line preview
+
+The CLI uses the same converter and themes without starting the API server. It
+writes an HTML preview next to the Markdown file by default. Open the file and
+click **复制到公众号** to copy the rendered rich HTML, including inline styles.
+
+```bash
+# Show available themes
+uv run wechat-markdown --list-themes
+
+# Generate article.html with the sspai theme
+uv run wechat-markdown article.md --theme sspai
+
+# Choose an output path and open it in the default browser
+uv run wechat-markdown article.md -t professional-clean -o preview/article.html --open
+```
+
+Run `uv sync` after pulling this change so the `wechat-markdown` entry point is
+installed in the project environment. You can also invoke it directly with
+`uv run python -m lib.wechat.cli`.
+
+Use a theme-aware reference card with the custom `:::reference` block:
+
+```markdown
+:::reference
+因微信公众号平台不支持除公众号内容以外的链接，其他平台的链接会展示但无法跳转。
+:::
+```
+
+Standard Markdown blockquotes (`> 引用内容`) remain supported as well.
+
 ## Project files
 - `server.py`: Flask app exposing the unified API endpoints
 - `docs/IMAGE_API_SOURCES.md`: Upstream image provider documentation, protocol notes, and update checklist
