@@ -113,7 +113,9 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
   | `provider` | string | Yes | `aliyun`, `ark`, `apimart`, `toapis`, `gemini`, or `xai` |
   | `model` | string | Yes | Provider-specific model identifier |
   | `prompt` | string | Yes | Image description |
-  | `size` | string | No | Resolution (`1K`, `2K`, `4K`) or aspect ratio (`1:1`, `16:9`, etc.) |
+  | `size` | string | No | Legacy compatibility field: resolution (`1K`, `2K`, `4K`) or aspect ratio (`1:1`, `16:9`, etc.) |
+  | `aspect_ratio` | string | No | Output aspect ratio, such as `1:1`, `16:9`, or `3:2` |
+  | `resolution` | string | No | Output resolution tier, such as `1K`, `2K`, or `4K`; availability depends on the model |
   | `images` | string[] | No | One to three input images for editing/reference generation; each item is a public URL, Base64 data URI, or bare Base64 |
   | `return_url` | boolean | No | Upload to configured S3/R2 storage and return `image_url` instead of Base64 (default `false`) |
 
@@ -122,7 +124,8 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
     "provider": "apimart",
     "model": "gpt-image-2",
     "prompt": "一只橘猫坐在窗台上看夕阳，水彩画风格",
-    "size": "16:9",
+    "aspect_ratio": "16:9",
+    "resolution": "2K",
     "return_url": false
   }
   ```
@@ -137,7 +140,8 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
     "images": [
       "https://cdn.example/reference.jpg"
     ],
-    "size": "1:1",
+    "aspect_ratio": "1:1",
+    "resolution": "2K",
     "return_url": true
   }
   ```
@@ -151,14 +155,28 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
   preventing DNS rebinding. ToAPIs accepts URL input only. Alibaba Cloud
   `z-image-turbo` and `wan2.5-t2i-preview` are text-to-image only.
 
+  `size` remains fully supported for existing clients. It is first interpreted
+  using its original behavior: known resolution tiers map to the provider's
+  resolution setting, while other values map to its aspect-ratio/size setting.
+  `aspect_ratio` and `resolution` are then applied as per-dimension overrides.
+  For example, `size="1:1"` with `resolution="2K"` requests 2K at 1:1, while
+  an explicit `aspect_ratio="16:9"` overrides a conflicting `size="1:1"`.
+  New integrations should use the two explicit fields and omit `size`.
+
+  Providers with separate upstream controls (Gemini, xAI, APIMart, and ToAPIs)
+  receive both fields. Ark and Alibaba Cloud expose a single upstream pixel-size
+  field, so the adapter combines supported aspect-ratio/resolution pairs into
+  provider-compatible dimensions. Model-specific resolution limits still apply.
+
   APIMart and ToAPIs are asynchronous upstream services. Alibaba Cloud Wan
   models are asynchronous, while Qwen Image and Z-Image are synchronous. This
   endpoint hides these differences, waits when necessary, downloads the final
   image, and returns the same response format for every provider. Ark requests
   `b64_json` directly from Seedream and therefore does not need a result download.
   xAI also requests `b64_json` so deployments do not depend on access to its
-  temporary image CDN. If `size` is omitted, ToAPIs receives no size field and
-  applies its model-specific default.
+  temporary image CDN. If all three sizing fields are omitted, no sizing field
+  is sent upstream and each model applies its own default; see
+  `docs/IMAGE_API_SOURCES.md` for the provider/model behavior matrix.
 
 - Base64 response (`return_url=false`):
   ```json

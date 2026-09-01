@@ -71,6 +71,31 @@ class ImageAPIModelsTests(unittest.TestCase):
             prompt="make it blue",
             size=None,
             images=[f"data:image/png;base64,{INPUT_IMAGE_BASE64}"],
+            aspect_ratio=None,
+            resolution=None,
+        )
+
+    @patch("server.generate_normalized_image", return_value=b"image-bytes")
+    def test_generation_passes_new_size_fields_and_keeps_legacy_size(self, generate):
+        with app.test_client() as client:
+            response = client.post("/v1/images/generations", json={
+                "provider": "xai",
+                "model": "model",
+                "prompt": "cat",
+                "size": "1:1",
+                "aspect_ratio": "16:9",
+                "resolution": "2K",
+            })
+
+        self.assertEqual(response.status_code, 200)
+        generate.assert_called_once_with(
+            provider="xai",
+            model="model",
+            prompt="cat",
+            size="1:1",
+            images=[],
+            aspect_ratio="16:9",
+            resolution="2K",
         )
 
     @patch("server.generate_normalized_image", return_value=b"image-bytes")
@@ -118,6 +143,20 @@ class ImageAPIModelsTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("must be an array", response.get_json()["error"])
 
+    def test_new_size_fields_must_be_non_empty_strings(self):
+        for field, value in (("aspect_ratio", ""), ("resolution", 2048)):
+            with self.subTest(field=field):
+                with app.test_client() as client:
+                    response = client.post("/v1/images/generations", json={
+                        "provider": "ark",
+                        "model": "model",
+                        "prompt": "cat",
+                        field: value,
+                    })
+
+                self.assertEqual(response.status_code, 400)
+                self.assertIn(field, response.get_json()["error"])
+
     @patch("server.threading.Thread")
     @patch("server.redis_client")
     @patch("server.get_provider")
@@ -130,6 +169,8 @@ class ImageAPIModelsTests(unittest.TestCase):
                 "model": "model",
                 "prompt": "make it blue",
                 "images": [INPUT_IMAGE_BASE64],
+                "aspect_ratio": "16:9",
+                "resolution": "2K",
             })
 
         self.assertEqual(response.status_code, 202)
@@ -138,6 +179,8 @@ class ImageAPIModelsTests(unittest.TestCase):
             worker_args[5],
             [f"data:image/png;base64,{INPUT_IMAGE_BASE64}"],
         )
+        self.assertEqual(worker_args[7], "16:9")
+        self.assertEqual(worker_args[8], "2K")
         thread_class.return_value.start.assert_called_once_with()
 
     @patch("server.generate_normalized_image", side_effect=ImageGenerationError("provider detail"))

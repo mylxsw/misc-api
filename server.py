@@ -405,6 +405,8 @@ def _parse_image_generation_payload(payload):
     model = (payload.get("model") or "").strip()
     prompt = (payload.get("prompt") or "").strip()
     size = payload.get("size")
+    aspect_ratio = payload.get("aspect_ratio")
+    resolution = payload.get("resolution")
     images = payload.get("images")
     return_url = payload.get("return_url", False)
 
@@ -416,6 +418,14 @@ def _parse_image_generation_payload(payload):
         raise ValueError("parameter 'prompt' is required")
     if size is not None and (not isinstance(size, str) or not size.strip()):
         raise ValueError("parameter 'size' must be a non-empty string")
+    if aspect_ratio is not None and (
+        not isinstance(aspect_ratio, str) or not aspect_ratio.strip()
+    ):
+        raise ValueError("parameter 'aspect_ratio' must be a non-empty string")
+    if resolution is not None and (
+        not isinstance(resolution, str) or not resolution.strip()
+    ):
+        raise ValueError("parameter 'resolution' must be a non-empty string")
     if images is not None and not isinstance(images, list):
         raise ValueError("parameter 'images' must be an array of image references")
     try:
@@ -424,10 +434,28 @@ def _parse_image_generation_payload(payload):
         raise ValueError(str(exc)) from exc
     if not isinstance(return_url, bool):
         raise ValueError("parameter 'return_url' must be a boolean")
-    return provider, model, prompt, size.strip() if size else None, images, return_url
+    return (
+        provider,
+        model,
+        prompt,
+        size.strip() if size else None,
+        images,
+        return_url,
+        aspect_ratio.strip() if aspect_ratio else None,
+        resolution.strip() if resolution else None,
+    )
 
 
-def _generate_image_response(provider, model, prompt, size, images, return_url):
+def _generate_image_response(
+    provider,
+    model,
+    prompt,
+    size,
+    images,
+    return_url,
+    aspect_ratio=None,
+    resolution=None,
+):
     # Validate storage before generating a billable image.
     storage = S3ImageStorage.from_env() if return_url else None
     image = generate_normalized_image(
@@ -436,6 +464,8 @@ def _generate_image_response(provider, model, prompt, size, images, return_url):
         prompt=prompt,
         size=size,
         images=images,
+        aspect_ratio=aspect_ratio,
+        resolution=resolution,
     )
     result = {
         "provider": provider,
@@ -479,11 +509,30 @@ def image_generation_endpoint():
         return jsonify({"error": str(exc)}), 500
 
 
-def process_image_generation_task(task_id, provider, model, prompt, size, images, return_url):
+def process_image_generation_task(
+    task_id,
+    provider,
+    model,
+    prompt,
+    size,
+    images,
+    return_url,
+    aspect_ratio=None,
+    resolution=None,
+):
     try:
         task_info = {
             "status": "success",
-            **_generate_image_response(provider, model, prompt, size, images, return_url),
+            **_generate_image_response(
+                provider,
+                model,
+                prompt,
+                size,
+                images,
+                return_url,
+                aspect_ratio,
+                resolution,
+            ),
             "created_at": time.time(),
             "task_id": task_id,
         }
@@ -509,9 +558,16 @@ def process_image_generation_task(task_id, provider, model, prompt, size, images
 def async_image_generation_endpoint():
     """Create a local image generation task and return immediately."""
     try:
-        provider, model, prompt, size, images, return_url = _parse_image_generation_payload(
-            request.get_json(silent=True) or {}
-        )
+        (
+            provider,
+            model,
+            prompt,
+            size,
+            images,
+            return_url,
+            aspect_ratio,
+            resolution,
+        ) = _parse_image_generation_payload(request.get_json(silent=True) or {})
         # Validate provider and storage configuration before accepting a task.
         get_provider(provider)
         if return_url:
@@ -535,7 +591,17 @@ def async_image_generation_endpoint():
     redis_client.setex(f"{IMAGE_TASK_PREFIX}{task_id}", REDIS_TTL, json.dumps(task_info))
     thread = threading.Thread(
         target=process_image_generation_task,
-        args=(task_id, provider, model, prompt, size, images, return_url),
+        args=(
+            task_id,
+            provider,
+            model,
+            prompt,
+            size,
+            images,
+            return_url,
+            aspect_ratio,
+            resolution,
+        ),
         daemon=True,
     )
     thread.start()

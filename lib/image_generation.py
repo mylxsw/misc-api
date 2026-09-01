@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import ipaddress
+import math
 import os
 import random
 import socket
@@ -53,6 +54,8 @@ class ImageProvider(ABC):
         prompt: str,
         size: str | None,
         images: list[str] | None = None,
+        aspect_ratio: str | None = None,
+        resolution: str | None = None,
     ) -> bytes:
         raise NotImplementedError
 
@@ -123,10 +126,12 @@ class GeminiProvider(ImageProvider):
         prompt: str,
         size: str | None,
         images: list[str] | None = None,
+        aspect_ratio: str | None = None,
+        resolution: str | None = None,
     ) -> bytes:
         images = images or []
         generation_config: dict[str, Any] = {"responseModalities": ["TEXT", "IMAGE"]}
-        image_config = _gemini_size(size)
+        image_config = _gemini_size(size, aspect_ratio, resolution)
         if image_config:
             generation_config["responseFormat"] = {"image": image_config}
 
@@ -168,6 +173,8 @@ class XAIProvider(ImageProvider):
         prompt: str,
         size: str | None,
         images: list[str] | None = None,
+        aspect_ratio: str | None = None,
+        resolution: str | None = None,
     ) -> bytes:
         images = images or []
         # Returning the image inline avoids a second request to xAI's temporary
@@ -179,7 +186,13 @@ class XAIProvider(ImageProvider):
             "n": 1,
             "response_format": "b64_json",
         }
-        _apply_size(payload, size, ratio_field="aspect_ratio")
+        _apply_size(
+            payload,
+            size,
+            ratio_field="aspect_ratio",
+            aspect_ratio=aspect_ratio,
+            resolution=resolution,
+        )
         path = "/images/generations"
         if images:
             path = "/images/edits"
@@ -215,6 +228,8 @@ class ArkProvider(ImageProvider):
         prompt: str,
         size: str | None,
         images: list[str] | None = None,
+        aspect_ratio: str | None = None,
+        resolution: str | None = None,
     ) -> bytes:
         images = images or []
         payload: dict[str, Any] = {
@@ -223,7 +238,7 @@ class ArkProvider(ImageProvider):
             "response_format": "b64_json",
             "watermark": False,
         }
-        mapped_size = _ark_size(size)
+        mapped_size = _ark_size(size, aspect_ratio, resolution)
         if mapped_size:
             payload["size"] = mapped_size
         if images:
@@ -256,6 +271,8 @@ class AliyunProvider(ImageProvider):
         prompt: str,
         size: str | None,
         images: list[str] | None = None,
+        aspect_ratio: str | None = None,
+        resolution: str | None = None,
     ) -> bytes:
         images = images or []
         if images and (
@@ -265,21 +282,33 @@ class AliyunProvider(ImageProvider):
                 f"aliyun model {model} does not support input images"
             )
         if model.startswith(self.synchronous_prefixes):
-            return self._generate_synchronously(model, prompt, size, images)
+            return self._generate_synchronously(
+                model, prompt, size, images, aspect_ratio, resolution
+            )
         if model.startswith("wan"):
-            return self._generate_asynchronously(model, prompt, size, images)
+            return self._generate_asynchronously(
+                model, prompt, size, images, aspect_ratio, resolution
+            )
         raise ImageGenerationError(
             "unsupported aliyun image model; expected a qwen-image, wan, or z-image model"
         )
 
     def _generate_synchronously(
-        self, model: str, prompt: str, size: str | None, images: list[str]
+        self,
+        model: str,
+        prompt: str,
+        size: str | None,
+        images: list[str],
+        aspect_ratio: str | None,
+        resolution: str | None,
     ) -> bytes:
         body = self._request_json(
             "POST",
             f"{self.api_base}/services/aigc/multimodal-generation/generation",
             headers={"Authorization": f"Bearer {self.api_key}"},
-            json=self._payload(model, prompt, size, images),
+            json=self._payload(
+                model, prompt, size, images, aspect_ratio, resolution
+            ),
         )
         self._raise_api_error(body)
         image_url = self._image_url(body)
@@ -288,7 +317,13 @@ class AliyunProvider(ImageProvider):
         return self._download_image(image_url)
 
     def _generate_asynchronously(
-        self, model: str, prompt: str, size: str | None, images: list[str]
+        self,
+        model: str,
+        prompt: str,
+        size: str | None,
+        images: list[str],
+        aspect_ratio: str | None,
+        resolution: str | None,
     ) -> bytes:
         body = self._request_json(
             "POST",
@@ -297,7 +332,9 @@ class AliyunProvider(ImageProvider):
                 "Authorization": f"Bearer {self.api_key}",
                 "X-DashScope-Async": "enable",
             },
-            json=self._payload(model, prompt, size, images),
+            json=self._payload(
+                model, prompt, size, images, aspect_ratio, resolution
+            ),
         )
         self._raise_api_error(body)
         output = body.get("output") or {}
@@ -336,10 +373,15 @@ class AliyunProvider(ImageProvider):
 
     @staticmethod
     def _payload(
-        model: str, prompt: str, size: str | None, images: list[str] | None = None
+        model: str,
+        prompt: str,
+        size: str | None,
+        images: list[str] | None = None,
+        aspect_ratio: str | None = None,
+        resolution: str | None = None,
     ) -> dict[str, Any]:
         parameters: dict[str, Any] = {"n": 1}
-        mapped_size = _aliyun_size(model, size)
+        mapped_size = _aliyun_size(model, size, aspect_ratio, resolution)
         if mapped_size:
             parameters["size"] = mapped_size
         content = [{"image": image} for image in (images or [])]
@@ -386,6 +428,8 @@ class AsyncGatewayProvider(ImageProvider, ABC):
         prompt: str,
         size: str | None,
         images: list[str] | None = None,
+        aspect_ratio: str | None = None,
+        resolution: str | None = None,
     ) -> bytes:
         images = images or []
         if self.public_image_urls_only and any(not _is_http_url(image) for image in images):
@@ -393,7 +437,13 @@ class AsyncGatewayProvider(ImageProvider, ABC):
                 f"{self.name} input images must use public http(s) URLs"
             )
         payload: dict[str, Any] = {"model": model, "prompt": prompt, "n": 1}
-        _apply_size(payload, size, ratio_field="size")
+        _apply_size(
+            payload,
+            size,
+            ratio_field="size",
+            aspect_ratio=aspect_ratio,
+            resolution=resolution,
+        )
         if images:
             payload[self.input_images_field] = images
         body = self._request_json(
@@ -592,9 +642,19 @@ def generate_image(
     prompt: str,
     size: str | None = None,
     images: list[str] | None = None,
+    aspect_ratio: str | None = None,
+    resolution: str | None = None,
 ) -> bytes:
     normalized_images = normalize_input_images(images, provider=provider, model=model)
-    return generate_normalized_image(provider, model, prompt, size, normalized_images)
+    return generate_normalized_image(
+        provider,
+        model,
+        prompt,
+        size,
+        normalized_images,
+        aspect_ratio,
+        resolution,
+    )
 
 
 def generate_normalized_image(
@@ -603,6 +663,8 @@ def generate_normalized_image(
     prompt: str,
     size: str | None,
     images: list[str],
+    aspect_ratio: str | None = None,
+    resolution: str | None = None,
 ) -> bytes:
     """Generate using image references already validated at the HTTP boundary."""
     return get_provider(provider).generate(
@@ -610,6 +672,8 @@ def generate_normalized_image(
         prompt=prompt,
         size=size,
         images=images,
+        aspect_ratio=aspect_ratio,
+        resolution=resolution,
     )
 
 
@@ -631,13 +695,42 @@ def _create_session() -> requests.Session:
     return session
 
 
-def _apply_size(payload: dict[str, Any], size: str | None, ratio_field: str) -> None:
-    if not size:
-        return
-    if size.lower() in {"0.5k", "1k", "2k", "4k"}:
-        payload["resolution"] = size
-    else:
-        payload[ratio_field] = size
+# Keep the legacy classifier byte-for-byte compatible with the original public
+# `size` behavior. Provider-specific tiers such as Ark's 1.5K and 3K should use
+# the explicit `resolution` field in new requests.
+RESOLUTION_TIERS = frozenset({"0.5k", "1k", "2k", "4k"})
+
+
+def _size_parts(
+    size: str | None,
+    aspect_ratio: str | None,
+    resolution: str | None,
+) -> tuple[str | None, str | None]:
+    """Resolve legacy size into independent fields, then apply new overrides."""
+    legacy_ratio = None
+    legacy_resolution = None
+    if size:
+        if size.lower() in RESOLUTION_TIERS:
+            legacy_resolution = size
+        else:
+            legacy_ratio = size
+    return aspect_ratio or legacy_ratio, resolution or legacy_resolution
+
+
+def _apply_size(
+    payload: dict[str, Any],
+    size: str | None,
+    ratio_field: str,
+    aspect_ratio: str | None = None,
+    resolution: str | None = None,
+) -> None:
+    resolved_ratio, resolved_resolution = _size_parts(
+        size, aspect_ratio, resolution
+    )
+    if resolved_ratio:
+        payload[ratio_field] = resolved_ratio
+    if resolved_resolution:
+        payload["resolution"] = resolved_resolution
 
 
 def normalize_input_images(
@@ -926,11 +1019,38 @@ ARK_2K_RATIOS = {
     "21:9": "3136x1344",
 }
 
+ARK_RESOLUTION_SCALES = {
+    "1K": 0.5,
+    "1.5K": 0.75,
+    "2K": 1.0,
+    "3K": 1.5,
+    "4K": 2.0,
+}
 
-def _ark_size(size: str | None) -> str | None:
-    if not size:
+
+def _ark_size(
+    size: str | None,
+    aspect_ratio: str | None = None,
+    resolution: str | None = None,
+) -> str | None:
+    resolved_ratio, resolved_resolution = _size_parts(
+        size, aspect_ratio, resolution
+    )
+    if resolved_ratio and resolved_resolution:
+        base_size = ARK_2K_RATIOS.get(resolved_ratio)
+        scale = ARK_RESOLUTION_SCALES.get(resolved_resolution.upper())
+        if not base_size or scale is None:
+            raise ImageGenerationError(
+                "ark cannot combine the requested aspect_ratio and resolution; "
+                "use a supported ratio and 1K, 1.5K, 2K, 3K, or 4K"
+            )
+        width, height = (int(value) for value in base_size.split("x"))
+        return f"{_round_to_multiple(width * scale, 8)}x{_round_to_multiple(height * scale, 8)}"
+    if resolved_ratio:
+        return ARK_2K_RATIOS.get(resolved_ratio, resolved_ratio.replace("*", "x"))
+    if not resolved_resolution:
         return None
-    return ARK_2K_RATIOS.get(size, size.replace("*", "x"))
+    return resolved_resolution.replace("*", "x")
 
 
 ALIYUN_1K_RATIOS = {
@@ -952,27 +1072,117 @@ ALIYUN_2K_RATIOS = {
     "3:4": "1728*2368",
 }
 
+ALIYUN_4K_RATIOS = {
+    "1:1": "4096*4096",
+    "16:9": "4096*2304",
+    "9:16": "2304*4096",
+    "4:3": "4096*3072",
+    "3:4": "3072*4096",
+}
 
-def _aliyun_size(model: str, size: str | None) -> str | None:
-    if not size:
+ALIYUN_WAN_T2I_1K_RATIOS = {
+    "1:1": "1280*1280",
+    "16:9": "1696*960",
+    "9:16": "960*1696",
+    "4:3": "1472*1104",
+    "3:4": "1104*1472",
+}
+
+
+def _aliyun_size(
+    model: str,
+    size: str | None,
+    aspect_ratio: str | None = None,
+    resolution: str | None = None,
+) -> str | None:
+    resolved_ratio, resolved_resolution = _size_parts(
+        size, aspect_ratio, resolution
+    )
+    if resolved_ratio and resolved_resolution:
+        return _aliyun_combined_size(model, resolved_ratio, resolved_resolution)
+    selected = resolved_ratio or resolved_resolution
+    if not selected:
         return None
-    normalized = size.upper()
+    normalized = selected.upper()
     if model.startswith("wan"):
-        if normalized in {"1K", "2K", "4K"} or "*" in size:
+        if normalized in {"1K", "2K", "4K"} or "*" in selected:
             return normalized
-        return ALIYUN_2K_RATIOS.get(size, size)
+        return ALIYUN_2K_RATIOS.get(selected, selected)
     if normalized in {"0.5K", "1K", "2K", "4K"}:
         pixels = {"0.5K": "512*512", "1K": "1024*1024", "2K": "2048*2048", "4K": "4096*4096"}
         return pixels[normalized]
-    return ALIYUN_1K_RATIOS.get(size, size)
+    return ALIYUN_1K_RATIOS.get(selected, selected)
 
 
-def _gemini_size(size: str | None) -> dict[str, str]:
-    if not size:
-        return {}
-    if size.lower() in {"0.5k", "1k", "2k", "4k"}:
-        return {"imageSize": size.upper()}
-    return {"aspectRatio": size}
+def _aliyun_combined_size(model: str, aspect_ratio: str, resolution: str) -> str:
+    normalized_resolution = resolution.upper()
+    if normalized_resolution == "2K" and aspect_ratio in ALIYUN_2K_RATIOS:
+        return ALIYUN_2K_RATIOS[aspect_ratio]
+    if normalized_resolution == "4K" and aspect_ratio in ALIYUN_4K_RATIOS:
+        return ALIYUN_4K_RATIOS[aspect_ratio]
+    if (
+        normalized_resolution == "1K"
+        and model in {"wan2.6-image", "wan2.6-t2i", "wan2.5-t2i-preview"}
+        and aspect_ratio in ALIYUN_WAN_T2I_1K_RATIOS
+    ):
+        return ALIYUN_WAN_T2I_1K_RATIOS[aspect_ratio]
+    if normalized_resolution == "1K" and aspect_ratio in ALIYUN_1K_RATIOS:
+        return ALIYUN_1K_RATIOS[aspect_ratio]
+
+    square_side = {
+        "0.5K": 512,
+        "1K": 1280 if model.startswith(("wan2.5", "wan2.6")) else 1024,
+        "2K": 2048,
+        "4K": 4096,
+    }.get(normalized_resolution)
+    if square_side is None:
+        raise ImageGenerationError(
+            "aliyun cannot combine the requested aspect_ratio and resolution; "
+            "use 0.5K, 1K, 2K, or 4K"
+        )
+    return _ratio_dimensions(aspect_ratio, square_side, "*", 16)
+
+
+def _gemini_size(
+    size: str | None,
+    aspect_ratio: str | None = None,
+    resolution: str | None = None,
+) -> dict[str, str]:
+    resolved_ratio, resolved_resolution = _size_parts(
+        size, aspect_ratio, resolution
+    )
+    config = {}
+    if resolved_ratio:
+        config["aspectRatio"] = resolved_ratio
+    if resolved_resolution:
+        config["imageSize"] = resolved_resolution.upper()
+    return config
+
+
+def _round_to_multiple(value: float, multiple: int) -> int:
+    return max(multiple, int(round(value / multiple)) * multiple)
+
+
+def _ratio_dimensions(
+    aspect_ratio: str,
+    square_side: int,
+    separator: str,
+    multiple: int,
+) -> str:
+    try:
+        width_ratio, height_ratio = (
+            float(value) for value in aspect_ratio.split(":", maxsplit=1)
+        )
+        if width_ratio <= 0 or height_ratio <= 0:
+            raise ValueError
+    except (TypeError, ValueError) as exc:
+        raise ImageGenerationError(
+            f"invalid aspect_ratio '{aspect_ratio}'; expected width:height"
+        ) from exc
+    ratio = width_ratio / height_ratio
+    width = _round_to_multiple(square_side * math.sqrt(ratio), multiple)
+    height = _round_to_multiple(square_side / math.sqrt(ratio), multiple)
+    return f"{width}{separator}{height}"
 
 
 def _decode_base64(value: str, provider: str) -> bytes:

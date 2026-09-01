@@ -62,6 +62,23 @@ class ImageProviderTests(unittest.TestCase):
             ["https://example.com/a.png", INPUT_DATA_URI],
         )
 
+    def test_ark_combines_new_ratio_and_resolution_over_legacy_size(self):
+        provider = ArkProvider("key", "https://ark.example/api/v3")
+        provider._request_json = Mock(return_value={
+            "data": [{"b64_json": base64.b64encode(IMAGE).decode()}]
+        })
+
+        provider.generate(
+            "doubao-seedream-5-0-260128",
+            "cat",
+            "1:1",
+            aspect_ratio="16:9",
+            resolution="4K",
+        )
+
+        payload = provider._request_json.call_args.kwargs["json"]
+        self.assertEqual(payload["size"], "5696x3200")
+
     def test_aliyun_qwen_uses_sync_api_and_maps_ratio(self):
         provider = AliyunProvider("key", "https://aliyun.example/api/v1")
         provider._request_json = Mock(return_value={
@@ -117,6 +134,17 @@ class ImageProviderTests(unittest.TestCase):
         self.assertEqual(provider.generate("z-image-turbo", "cat", "1K"), IMAGE)
         payload = provider._request_json.call_args.kwargs["json"]
         self.assertEqual(payload["parameters"]["size"], "1024*1024")
+
+    def test_aliyun_combines_new_ratio_and_resolution(self):
+        payload = AliyunProvider._payload(
+            "qwen-image-3.0-pro",
+            "cat",
+            "1:1",
+            aspect_ratio="16:9",
+            resolution="2K",
+        )
+
+        self.assertEqual(payload["parameters"]["size"], "2688*1536")
 
     @patch("lib.image_generation.time.sleep")
     def test_aliyun_wan_submits_and_polls(self, _sleep):
@@ -176,6 +204,28 @@ class ImageProviderTests(unittest.TestCase):
         self.assertEqual(config["responseFormat"], {"image": {"imageSize": "2K"}})
         self.assertNotIn("imageConfig", config)
 
+    def test_gemini_sends_ratio_and_resolution_with_new_fields_taking_precedence(self):
+        provider = GeminiProvider("key", "https://gemini.example")
+        provider._request_json = Mock(return_value={
+            "candidates": [{"content": {"parts": [{
+                "inlineData": {"data": base64.b64encode(IMAGE).decode()}
+            }]}}]
+        })
+
+        provider.generate(
+            "image-model",
+            "cat",
+            "1:1",
+            aspect_ratio="16:9",
+            resolution="2k",
+        )
+
+        config = provider._request_json.call_args.kwargs["json"]["generationConfig"]
+        self.assertEqual(
+            config["responseFormat"],
+            {"image": {"aspectRatio": "16:9", "imageSize": "2K"}},
+        )
+
     def test_gemini_sends_reference_image_as_inline_data(self):
         provider = GeminiProvider("key", "https://gemini.example")
         provider._request_json = Mock(return_value={
@@ -228,6 +278,18 @@ class ImageProviderTests(unittest.TestCase):
         self.assertEqual(call.kwargs["json"]["aspect_ratio"], "3:2")
         self.assertEqual(call.kwargs["json"]["response_format"], "b64_json")
 
+    def test_xai_merges_legacy_ratio_with_new_resolution(self):
+        provider = XAIProvider("key", "https://xai.example/v1")
+        provider._request_json = Mock(return_value={
+            "data": [{"b64_json": base64.b64encode(IMAGE).decode()}]
+        })
+
+        provider.generate("grok-imagine-image-2.0", "cat", "3:2", resolution="2K")
+
+        payload = provider._request_json.call_args.kwargs["json"]
+        self.assertEqual(payload["aspect_ratio"], "3:2")
+        self.assertEqual(payload["resolution"], "2K")
+
     @patch("lib.image_generation.time.sleep")
     def test_apimart_submits_and_polls(self, _sleep):
         provider = APIMartProvider("key", "https://apimart.example/v1")
@@ -248,6 +310,30 @@ class ImageProviderTests(unittest.TestCase):
         self.assertEqual(submit.kwargs["json"]["size"], "1:1")
         self.assertEqual(submit.kwargs["json"]["image_urls"], [INPUT_DATA_URI])
         self.assertEqual(provider._download_image.call_args.args[0], "https://image.example/a.png")
+
+    @patch("lib.image_generation.time.sleep")
+    def test_apimart_new_fields_override_legacy_dimensions(self, _sleep):
+        provider = APIMartProvider("key", "https://apimart.example/v1")
+        provider._request_json = Mock(side_effect=[
+            {"code": 200, "data": [{"task_id": "task-new-size"}]},
+            {"code": 200, "data": {
+                "status": "completed",
+                "result": {"images": [{"url": ["https://image.example/a.png"]}]},
+            }},
+        ])
+        provider._download_image = Mock(return_value=IMAGE)
+
+        provider.generate(
+            "gpt-image-2",
+            "cat",
+            "1K",
+            aspect_ratio="16:9",
+            resolution="2K",
+        )
+
+        payload = provider._request_json.call_args_list[0].kwargs["json"]
+        self.assertEqual(payload["size"], "16:9")
+        self.assertEqual(payload["resolution"], "2K")
 
     @patch("lib.image_generation.time.sleep")
     def test_toapis_submits_and_polls(self, _sleep):

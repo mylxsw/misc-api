@@ -24,7 +24,7 @@
 - `tests/test_image_api.py`：统一 HTTP API 测试。
 - `tests/test_object_storage.py`：S3/R2 存储测试。
 
-统一请求公开 `provider`、`model`、`prompt`、`size`、`images` 和 `return_url`。`images` 为可选数组，支持 1–3 个公网 URL、Base64 data URI 或裸 Base64，用于图像编辑、多图融合和参考生成。Base64 输入仅接受跨 provider 可移植的 JPEG、PNG、WebP，并执行完整图片校验。Qwen Image、Wan 2.6、ToAPIs 的单图上限为 10 MB，其余适配器为 20 MB；ToAPIs 只接受 URL。不同上游的 `size` 和输入图片字段由适配器转换。生成结果默认返回 `image_base64`；`return_url=true` 时上传 R2 并返回 `image_url`。
+统一请求公开 `provider`、`model`、`prompt`、`size`、`aspect_ratio`、`resolution`、`images` 和 `return_url`。`images` 为可选数组，支持 1–3 个公网 URL、Base64 data URI 或裸 Base64，用于图像编辑、多图融合和参考生成。Base64 输入仅接受跨 provider 可移植的 JPEG、PNG、WebP，并执行完整图片校验。Qwen Image、Wan 2.6、ToAPIs 的单图上限为 10 MB，其余适配器为 20 MB；ToAPIs 只接受 URL。不同上游的尺寸参数和输入图片字段由适配器转换。生成结果默认返回 `image_base64`；`return_url=true` 时上传 R2 并返回 `image_url`。
 
 图生图沿用现有两个生成入口，不增加独立路由：
 
@@ -34,7 +34,8 @@
   "model": "doubao-seedream-4-5-251128",
   "prompt": "保留主体和构图，转换成水彩插画风格",
   "images": ["https://cdn.example/reference.jpg"],
-  "size": "1:1",
+  "aspect_ratio": "1:1",
+  "resolution": "2K",
   "return_url": true
 }
 ```
@@ -49,6 +50,45 @@ Provider 映射如下：
 | `aliyun` | `messages[].content[].image`，图片位于文本指令前 | Qwen、Wan 2.7/2.6 支持；Z-Image 和 `wan2.5-t2i-preview` 不支持 |
 | `apimart` | `image_urls` | URL、data URI、裸 Base64 |
 | `toapis` | `image_urls`（GPT-Image 会在上游归一化为 `reference_images`） | 上游当前只接受公网 URL |
+
+## 尺寸参数与兼容规则
+
+统一接口提供三个可选尺寸参数：
+
+| 参数 | 用途 | 兼容性 |
+| :--- | :--- | :--- |
+| `aspect_ratio` | 明确指定宽高比，例如 `1:1`、`16:9`、`3:2` | 新参数，推荐使用 |
+| `resolution` | 明确指定分辨率档位，例如 `1K`、`2K`、`4K` | 新参数，具体档位受模型限制 |
+| `size` | 按原逻辑表示分辨率档位或宽高比 | 保留，不废弃，现有客户端无需修改 |
+
+解析顺序为：先按旧逻辑解释 `size`，再用两个新参数分别覆盖对应维度。覆盖是“按维度”进行的：
+
+- `size="1:1"`、`resolution="2K"`：保留旧参数提供的 1:1，再使用新参数提供的 2K。
+- `size="1:1"`、`aspect_ratio="16:9"`：最终比例为 16:9，新比例覆盖旧比例。
+- `size="1K"`、`resolution="2K"`：最终分辨率为 2K，新分辨率覆盖旧分辨率。
+- 同时提供 `aspect_ratio` 和 `resolution`：两个新参数共同生效；新调用方推荐只使用这两个字段。
+- 三个参数都不提供：适配器不会自行补默认值，由上游模型决定。
+
+Gemini、xAI、APIMart、ToAPIs 的上游协议可以分别携带比例和分辨率。Ark 和 Aliyun 只有一个最终像素尺寸字段；当两个新参数同时提供时，适配器会把受支持的组合转换成上游接受的 `宽x高` 或 `宽*高`。转换不会绕过模型本身的限制，例如 Wan 2.7 Pro 只有文生图支持 4K，Qwen Image 3.0 最大总像素为 2048×2048。
+
+### 三个尺寸参数都不提供时
+
+下表描述的是当前上游文档中的默认行为。Provider 升级模型或调整别名路由后可能变化；需要稳定构图和成本时，应显式传入 `aspect_ratio` 与 `resolution`。
+
+| Provider / 模型 | 文生图默认行为 | 图生图默认行为 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `gemini`：Gemini 3.1 Flash / 3 Pro | 1K、1:1 | 默认 1K，比例跟随输入图 | Google 官方明确；输出像素可能被模型规格化，不保证与输入图逐像素相同 |
+| `xai`：`grok-imagine-image-2.0` | 1K，比例为 `auto`，由模型选择 | 1K，比例跟随第一张输入图 | 旧的 `grok-imagine-image` 是兼容别名，不应依赖完全相同的长期默认值 |
+| `ark`：Seedream 4.0–5.0 | 使用对应模型/Endpoint 的原生默认值 | 使用对应模型/Endpoint 的原生默认值 | Ark API 没有为所有版本承诺统一、稳定的缺省尺寸；实践中常见为 2K 档，但不作为本 API 契约 |
+| `aliyun`：Qwen Image 3.0 | 根据 prompt 自动推荐尺寸与比例 | 同样由模型推荐，不保证跟随输入图 | 总像素范围为 512×512 至 2048×2048 |
+| `aliyun`：Wan 2.7 Image / Pro | 默认 2K；无输入图时为正方形 | 默认 2K；比例跟随最后一张输入图 | Wan 2.7 Pro 的 4K 仅适用于符合条件的文生图 |
+| `aliyun`：`wan2.6-t2i`、`wan2.5-t2i-preview` | 默认 1280×1280 | 不支持当前统一图生图调用 | `wan2.5-t2i-preview` 会在本地拒绝输入图 |
+| `aliyun`：`wan2.6-image` | 当前请求未启用交错模式时，无输入图可能被上游拒绝 | 默认 1K 档，总像素接近 1280×1280，比例跟随最后一张输入图 | 纯文生图优先使用 `wan2.6-t2i` |
+| `aliyun`：`z-image-turbo` | 默认 1024×1536（2:3 竖图） | 不支持，本地提前拒绝 | 仅文生图 |
+| `apimart`：GPT Image 2 / Ext | 1K、1:1 | APIMart 文档说明继承输入图分辨率/比例 | 网关行为与 ToAPIs 不完全相同 |
+| `apimart`：Gemini / Nano Banana 别名 | 默认 1K；无输入图通常为 1:1 | 通常沿用 Gemini 的输入图比例 | 分辨率由网关文档明确，缺省比例沿用模型语义 |
+| `toapis`：GPT Image 2 | 1K、1:1 | 文档未承诺继承输入图，按 1K、1:1 默认处理 | 不要假设与 APIMart 同名模型完全一致 |
+| `toapis`：Gemini / Nano Banana 别名 | 默认 1K；无输入图通常为 1:1 | 通常沿用 Gemini 的输入图比例 | 别名的实际上游路由可能调整 |
 
 ## Provider 总览
 
@@ -78,7 +118,7 @@ Provider 映射如下：
 - 响应图片：`candidates[0].content.parts[].inlineData.data`。
 - 图生图：统一 `images` 会转换成 `parts[].inlineData`；URL 由服务端下载并转换，Base64 直接解码后重新编码。
 - 为防止服务端请求伪造，Gemini URL 输入只允许解析到公网地址的 HTTP(S) URL、80/443 端口，并逐次校验重定向目标；实际连接固定使用已验证 IP，同时保留原域名的 TLS SNI 与证书校验，避免 DNS 重绑定。
-- `size` 映射到当前 REST 协议的 `generationConfig.responseFormat.image`：分辨率使用 `imageSize`，宽高比使用 `aspectRatio`。
+- `resolution` 映射到当前 REST 协议的 `generationConfig.responseFormat.image.imageSize`，`aspect_ratio` 映射到 `aspectRatio`；兼容字段 `size` 仍按原逻辑映射。
 - 当前首选模型为 `gemini-3.1-flash-image`、`gemini-3-pro-image`；目录暂时保留两个 `*-preview` ID 作为兼容别名。实际可用模型取决于 API Key、地域和 Google 的模型生命周期。
 
 ## xAI
@@ -97,7 +137,7 @@ Provider 映射如下：
 - 文生图使用 `/images/generations`；存在 `images` 时切换到 JSON 协议的 `/images/edits`。
 - 单张输入映射为 `image={type,url}`，多张输入映射为 `images=[...]`；请求继续指定 `response_format=b64_json`，避免生产环境二次访问临时 CDN。
 - 当前首选模型：`grok-imagine-image-2.0`；保留 `grok-imagine-image` 兼容别名。
-- 分辨率映射为 `resolution`，宽高比映射为 `aspect_ratio`。
+- 分辨率映射为上游 `resolution`，宽高比映射为上游 `aspect_ratio`；两者可以同时发送。
 
 ## 火山引擎方舟 Ark
 
@@ -118,7 +158,7 @@ Provider 映射如下：
 - `model` 可使用已开通的 Model ID 或 Ark Endpoint ID。
 - 对接范围：Doubao Seedream 5.0 Pro、Seedream 5.0 Lite、Seedream 4.5、Seedream 4.0。
 - 已真实验证：`doubao-seedream-4-0-250828`。
-- 常见宽高比会转换为兼容的 2K 像素尺寸；显式分辨率档位和 `宽x高` 会透传。
+- 常见宽高比会转换为兼容的 2K 像素尺寸；显式分辨率档位和 `宽x高` 会透传。新参数同时出现时，会根据比例和分辨率档位组合成一个 `宽x高`。
 
 ## 阿里云百炼 Aliyun
 
@@ -170,6 +210,7 @@ GET {ALIYUN_API_BASE}/tasks/{task_id}
 - `z-image-turbo` 和 `wan2.5-t2i-preview` 仅支持文生图，传入 `images` 时适配器会在计费调用前拒绝。
 - API Key、模型和 `ALIYUN_API_BASE` 必须属于同一地域及 Workspace。
 - Workspace 专属域名优先于公共 DashScope 域名。
+- Aliyun 上游只有一个 `parameters.size`；适配器会把 `aspect_ratio` 与 `resolution` 的常用组合转换为官方推荐像素尺寸，其他合法比例按对应分辨率档位计算并对齐到 16 像素。
 - 已真实验证：`qwen-image-3.0-pro`。
 
 ## APIMart
@@ -197,6 +238,7 @@ GET  {APIMART_API_BASE}/tasks/{task_id}
 - 图片 URL：`data.result.images[0].url[0]`。
 - 已真实验证：`gpt-image-2`。
 - 图生图使用 `image_urls`，支持公网 URL 和 Base64 data URI 混合输入。
+- `aspect_ratio` 映射为上游 `size`，`resolution` 映射为上游 `resolution`，两者可以同时发送。
 - 兼容文档中的 GPT-Image 和 Nano Banana 模型别名；目录详见 `GET /v1/images/models`。
 
 ## ToAPIs
@@ -223,7 +265,7 @@ GET  {TOAPIS_API_BASE}/images/generations/{task_id}
 - 任务状态：`queued`、`in_progress`、`completed`、`failed`。
 - 图片 URL：`result.data[0].url`，通常有效 24 小时。
 - 图生图统一发送 `image_urls`，兼容 Gemini/Nano Banana；GPT-Image 会由 ToAPIs 归一化为 `reference_images`。ToAPIs 已停止在这些字段中接收 Base64，因此统一接口会提前拒绝非 HTTP(S) 输入。
-- 未指定 `size` 时不发送该字段，由模型采用自身默认值；不会补充不兼容的 `size=auto`。
+- `aspect_ratio` 映射为上游 `size`，`resolution` 映射为上游 `resolution`。三个统一尺寸参数都未指定时不发送任何尺寸字段，由模型采用自身默认值；不会补充不兼容的 `size=auto`。
 - 已真实验证：`gpt-image-2`，API Base 使用 `https://toapis.xyz/v1`。
 
 ## Cloudflare R2 / S3
