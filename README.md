@@ -546,6 +546,27 @@ body or supplied via `WECHAT_APPID` / `WECHAT_SECRET` env vars.
   }
   ```
 
+#### Manage WeChat drafts
+
+These endpoints use `WECHAT_APPID` / `WECHAT_SECRET` by default. To override
+credentials per request, send `X-WeChat-AppId` and `X-WeChat-AppSecret` headers.
+The update endpoint also accepts `appid` and `secret` in its JSON body.
+
+- **GET** `/v1/wechat/drafts?offset=0&count=10&no_content=0`
+  - `offset` must be non-negative, `count` must be `1..20`, and `no_content`
+    must be `0` or `1`.
+  - Returns WeChat's `total_count`, `item_count`, and `item` fields.
+- **GET** `/v1/wechat/drafts/<media_id>`
+  - Returns the draft's `news_item` array.
+- **PUT** `/v1/wechat/drafts/<media_id>`
+  - Body: `{"index": 0, "article": {"title": "标题", "content": "<p>正文</p>"}}`
+  - `article` is passed to WeChat as the replacement article and may include
+    fields such as `author`, `digest`, `thumb_media_id`, comment settings,
+    `image_info`, `cover_info`, and `product_info`.
+- **DELETE** `/v1/wechat/drafts/<media_id>`
+  - Permanently deletes the draft and returns
+    `{"media_id": "...", "deleted": true}`.
+
 Sample request:
 ```bash
 curl -X POST http://localhost:8000/v1/wechat/markdown/preview \

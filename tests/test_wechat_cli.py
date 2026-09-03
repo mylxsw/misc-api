@@ -48,7 +48,7 @@ class WeChatCliTest(unittest.TestCase):
         )
 
         self.assertIn("background: #6b9b7a", result.html)
-        self.assertIn("color: #333", result.html)
+        self.assertIn("color: #222", result.html)
         self.assertIn('data-darkmode-color="#e6e6e6"', result.html)
         self.assertIn("border-radius: 999px", result.html)
         self.assertIn("border-left: 5px solid #6b9b7a", result.html)

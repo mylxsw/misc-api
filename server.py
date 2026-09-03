@@ -34,6 +34,11 @@ from lib.wechat import (
     upload_thumb_bytes,
     load_image_bytes,
     create_draft,
+    delete_draft,
+    get_draft,
+    list_drafts,
+    update_draft,
+    WeChatDraftAPIError,
 )
 from fishaudio import FishAudio
 from fishaudio.types import TTSConfig, Prosody
@@ -683,6 +688,60 @@ _wechat_appid = os.getenv("WECHAT_APPID")
 _wechat_secret = os.getenv("WECHAT_SECRET")
 
 
+def _wechat_credentials(payload=None):
+    """Resolve credentials without requiring secrets in URL query strings."""
+    payload = payload if isinstance(payload, dict) else {}
+    appid = (
+        payload.get("appid")
+        or request.headers.get("X-WeChat-AppId")
+        or _wechat_appid
+    )
+    secret = (
+        payload.get("secret")
+        or request.headers.get("X-WeChat-AppSecret")
+        or _wechat_secret
+    )
+    if not appid or not secret:
+        raise ValueError(
+            "'appid' and 'secret' are required (or set WECHAT_APPID/WECHAT_SECRET)"
+        )
+    return appid, secret
+
+
+def _wechat_token(payload=None):
+    appid, secret = _wechat_credentials(payload)
+    return get_access_token(appid, secret)
+
+
+def _parse_wechat_int(value, name, minimum, maximum=None):
+    if isinstance(value, bool):
+        raise ValueError(f"parameter '{name}' must be an integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"parameter '{name}' must be an integer") from exc
+    if parsed < minimum or (maximum is not None and parsed > maximum):
+        expected = f"between {minimum} and {maximum}" if maximum is not None else f">= {minimum}"
+        raise ValueError(f"parameter '{name}' must be {expected}")
+    return parsed
+
+
+def _wechat_draft_error_response(exc):
+    if exc.errcode == 40007:
+        status = 404
+    elif exc.errcode in {40114, 41039, 45166, 53404, 53405, 53406, 88000}:
+        status = 400
+    else:
+        status = 502
+    return jsonify(
+        {
+            "error": exc.errmsg,
+            "wechat_errcode": exc.errcode,
+            "operation": exc.operation,
+        }
+    ), status
+
+
 def _convert_markdown(markdown_text, theme_name):
     """Convert Markdown to WeChat inline-style HTML using the named theme.
 
@@ -843,6 +902,91 @@ def wechat_draft_endpoint():
             "images_uploaded": images_uploaded,
         }
     )
+
+
+@app.route("/v1/wechat/drafts", methods=["GET"])
+def wechat_drafts_endpoint():
+    """List drafts. Query: offset=0, count=10, no_content=0."""
+    try:
+        offset = _parse_wechat_int(request.args.get("offset", 0), "offset", 0)
+        count = _parse_wechat_int(request.args.get("count", 10), "count", 1, 20)
+        no_content = _parse_wechat_int(
+            request.args.get("no_content", 0), "no_content", 0, 1
+        )
+        data = list_drafts(_wechat_token(), offset, count, no_content)
+        return jsonify(data)
+    except WeChatDraftAPIError as exc:
+        return _wechat_draft_error_response(exc)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 502
+
+
+@app.route("/v1/wechat/drafts/<path:media_id>", methods=["GET"])
+def wechat_draft_detail_endpoint(media_id):
+    """Get a draft by media ID."""
+    media_id = media_id.strip()
+    if not media_id:
+        return jsonify({"error": "parameter 'media_id' is required"}), 400
+    try:
+        return jsonify(get_draft(_wechat_token(), media_id))
+    except WeChatDraftAPIError as exc:
+        return _wechat_draft_error_response(exc)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 502
+
+
+@app.route("/v1/wechat/drafts/<path:media_id>", methods=["PUT"])
+def wechat_draft_update_endpoint(media_id):
+    """Update one article in a draft."""
+    media_id = media_id.strip()
+    if not media_id:
+        return jsonify({"error": "parameter 'media_id' is required"}), 400
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "request body must be a JSON object"}), 400
+
+    article = payload.get("article")
+    if not isinstance(article, dict):
+        return jsonify({"error": "parameter 'article' is required and must be an object"}), 400
+    for field in ("title", "content"):
+        if not isinstance(article.get(field), str) or not article[field].strip():
+            return jsonify({"error": f"parameter 'article.{field}' is required"}), 400
+    for field in ("need_open_comment", "only_fans_can_comment"):
+        value = article.get(field)
+        if field in article and (isinstance(value, bool) or value not in (0, 1)):
+            return jsonify({"error": f"parameter 'article.{field}' must be 0 or 1"}), 400
+
+    try:
+        index = _parse_wechat_int(payload.get("index", 0), "index", 0)
+        update_draft(_wechat_token(payload), media_id, index, article)
+        return jsonify({"media_id": media_id, "index": index, "updated": True})
+    except WeChatDraftAPIError as exc:
+        return _wechat_draft_error_response(exc)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 502
+
+
+@app.route("/v1/wechat/drafts/<path:media_id>", methods=["DELETE"])
+def wechat_draft_delete_endpoint(media_id):
+    """Permanently delete a draft by media ID."""
+    media_id = media_id.strip()
+    if not media_id:
+        return jsonify({"error": "parameter 'media_id' is required"}), 400
+    try:
+        delete_draft(_wechat_token(), media_id)
+        return jsonify({"media_id": media_id, "deleted": True})
+    except WeChatDraftAPIError as exc:
+        return _wechat_draft_error_response(exc)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 502
 
 
 def create_app() -> Flask:
