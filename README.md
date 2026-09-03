@@ -452,9 +452,37 @@ PY
 
 ### Markdown → WeChat (公众号排版与草稿推送)
 
-Convert Markdown into WeChat-compatible inline-style HTML (18 built-in themes,
+Convert Markdown into WeChat-compatible inline-style HTML (19 built-in themes,
 CJK spacing fixes, dark-mode attributes, list/link/code-block handling), then
 either preview it or push it straight into the Official Account draft box.
+
+#### Built-in themes
+
+Themes are YAML files in `lib/wechat/themes/`; adding a new file there makes it
+available to both the CLI and the API automatically. List them at runtime with
+`GET /v1/wechat/markdown/themes` or `uv run wechat-markdown --list-themes`.
+
+| Theme | Description |
+| :--- | :--- |
+| `professional-clean` (default) | 干净专业的企业公众号风格，适合大多数商业内容 |
+| `bauhaus` | 包豪斯设计风格：纯白底黑色为主，红蓝黄色块点缀，几何感强烈 |
+| `bold-green` | 大胆森林绿风格：白底绿色主色，适合环保健康和可持续发展内容 |
+| `bold-navy` | 大胆藏青风格：白底藏青主色，适合金融商务和行业分析内容 |
+| `bytedance` | 字节跳动风：白底品牌蓝，现代无衬线，大间距，适合科技产品内容 |
+| `elegant-rose` | 优雅玫瑰风格：浅粉底玫瑰色点缀，适合女性生活和时尚内容 |
+| `focus-red` | 聚焦红风格：白底中国红标题和引用边框，适合新闻评论和观点输出 |
+| `github` | GitHub 风格：白底蓝色链接，等宽代码块，适合技术文档和开发者内容 |
+| `impeccable` | 基于 Impeccable 设计语言，衬线正文+无衬线标题，深青+琥珀双色 |
+| `ink` | 水墨中国风：宣纸底墨色文字，中文衬线字体，适合文化和人文内容 |
+| `lobster-notes` | 军哥龙虾笔记专属：橙红主调，深色代码块，移动端优先教学风 |
+| `midnight` | 午夜深色主题：深蓝黑底白色文字，适合技术和深夜阅读内容 |
+| `minimal` | 极简黑白灰风格，无色彩干扰，内容至上 |
+| `minimal-gold` | 极简金色风格：白底金色细线点缀，适合高端品牌和精品内容 |
+| `newspaper` | 经典报纸风格：米黄底深棕文字，衬线字体质感，适合深度报道和评论 |
+| `spring-fresh` | 春日清新风格：鼠尾草绿、胶囊标题与柔和圆角，适合生活方式内容 |
+| `sspai` | 少数派风格：暖白底红色点缀，适合数码生活和效率工具内容 |
+| `tech-modern` | 科技感蓝紫渐变风格，适合技术和产品类内容 |
+| `warm-editorial` | 暖色编辑风格，适合生活方式和文化类内容 |
 
 #### List WeChat themes
 - **GET** `/v1/wechat/markdown/themes`
