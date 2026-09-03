@@ -46,18 +46,22 @@ The following environment variables are required to run the service:
 | `R2_CDN_URL` | Public CDN base URL used to build the returned image URL | Yes (when `return_url=true`) |
 | `R2_REGION` | S3 signing region (default `auto`) | No |
 | `R2_KEY_PREFIX` | Optional object key prefix | No |
-| `WECHAT_APPID` | WeChat Official Account AppID (for draft push) | No (or pass in request body) |
-| `WECHAT_SECRET` | WeChat Official Account AppSecret (for draft push) | No (or pass in request body) |
+| `WECHAT_APPID` | WeChat Official Account AppID (for draft creation and management) | Yes for WeChat APIs, unless supplied by the request |
+| `WECHAT_SECRET` | WeChat Official Account AppSecret (for draft creation and management) | Yes for WeChat APIs, unless supplied by the request |
 
 ## Quick start (local)
 ```bash
 # Install deps with uv (creates .venv)
 uv sync --no-dev
 
-# Run the API
+# Run the API with variables already exported in the current shell
 uv run python server.py
+
+# Or load a local .env file before starting (server.py does not load it automatically)
+set -a; . ./.env; set +a; uv run python server.py
 ```
-The service listens on `http://localhost:8000`.
+The service listens on `http://localhost:8000`. Docker Compose automatically
+reads the project-level `.env` file for `${...}` substitutions.
 
 ## Docker
 ```bash
@@ -81,6 +85,10 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
 - [`GET /v1/wechat/markdown/themes`](#list-wechat-themes)：获取微信公众号 Markdown 排版支持的主题。
 - [`POST /v1/wechat/markdown/preview`](#preview-wechat-article)：将 Markdown 转换为可预览或粘贴到微信编辑器的 HTML。
 - [`POST /v1/wechat/markdown/draft`](#publish-wechat-draft)：将 Markdown 文章及图片上传到微信公众号草稿箱。
+- [`GET /v1/wechat/drafts`](#manage-wechat-drafts)：分页查询微信公众号草稿列表。
+- [`GET /v1/wechat/drafts/<media_id>`](#get-draft-detail)：查询指定草稿详情。
+- [`PUT /v1/wechat/drafts/<media_id>`](#update-draft)：更新草稿中的指定文章。
+- [`DELETE /v1/wechat/drafts/<media_id>`](#delete-draft)：永久删除指定草稿。
 
 ### List image providers and models
 
@@ -548,24 +556,184 @@ body or supplied via `WECHAT_APPID` / `WECHAT_SECRET` env vars.
 
 #### Manage WeChat drafts
 
-These endpoints use `WECHAT_APPID` / `WECHAT_SECRET` by default. To override
-credentials per request, send `X-WeChat-AppId` and `X-WeChat-AppSecret` headers.
-The update endpoint also accepts `appid` and `secret` in its JSON body.
+以下接口管理微信公众号草稿箱。服务默认使用进程环境变量
+`WECHAT_APPID` / `WECHAT_SECRET`；也可以通过请求头逐次覆盖：
 
-- **GET** `/v1/wechat/drafts?offset=0&count=10&no_content=0`
-  - `offset` must be non-negative, `count` must be `1..20`, and `no_content`
-    must be `0` or `1`.
-  - Returns WeChat's `total_count`, `item_count`, and `item` fields.
+```http
+X-WeChat-AppId: your-appid
+X-WeChat-AppSecret: your-appsecret
+```
+
+出于安全考虑，GET 和 DELETE 接口不接受 URL 查询参数中的 Secret，避免凭证进入
+访问日志。PUT 更新接口除请求头外，还兼容在 JSON 顶层传入 `appid` 和 `secret`。
+生产环境推荐只配置服务端环境变量，不要由客户端传递 AppSecret。
+
+> `server.py` 不会自动读取 `.env`。本地运行前请先执行
+> `set -a; . ./.env; set +a`，或使用会加载项目 `.env` 的 Docker Compose。
+
+##### List drafts
+
+- **GET** `/v1/wechat/drafts`
+
+查询参数：
+
+| 参数 | 类型 | 必填 | 默认值 | 约束 |
+| :--- | :--- | :--- | :--- | :--- |
+| `offset` | integer | No | `0` | 必须大于等于 `0` |
+| `count` | integer | No | `10` | 必须在 `1..20` 之间 |
+| `no_content` | integer | No | `0` | `1` 不返回文章正文，`0` 返回完整内容 |
+
+```bash
+curl 'http://localhost:8000/v1/wechat/drafts?offset=0&count=10&no_content=1'
+```
+
+响应直接保留微信草稿列表字段：
+
+```json
+{
+  "total_count": 16,
+  "item_count": 10,
+  "item": [
+    {
+      "media_id": "draft-media-id",
+      "update_time": 1750000000
+    }
+  ]
+}
+```
+
+当 `no_content=0` 时，每个 `item` 还会包含
+`content.news_item`；设为 `1` 可显著减小列表响应。
+
+##### Get draft detail
+
 - **GET** `/v1/wechat/drafts/<media_id>`
-  - Returns the draft's `news_item` array.
+
+```bash
+curl 'http://localhost:8000/v1/wechat/drafts/draft-media-id'
+```
+
+响应示例：
+
+```json
+{
+  "news_item": [
+    {
+      "article_type": "news",
+      "title": "文章标题",
+      "author": "作者",
+      "digest": "文章摘要",
+      "content": "<p>正文 HTML</p>",
+      "content_source_url": "https://example.com/article",
+      "thumb_media_id": "thumb-media-id",
+      "need_open_comment": 0,
+      "only_fans_can_comment": 0,
+      "url": "微信返回的草稿临时链接"
+    }
+  ]
+}
+```
+
+##### Update draft
+
 - **PUT** `/v1/wechat/drafts/<media_id>`
-  - Body: `{"index": 0, "article": {"title": "标题", "content": "<p>正文</p>"}}`
-  - `article` is passed to WeChat as the replacement article and may include
-    fields such as `author`, `digest`, `thumb_media_id`, comment settings,
-    `image_info`, `cover_info`, and `product_info`.
+- **Content-Type** `application/json`
+
+顶层请求字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `index` | integer | No | 要更新的文章位置，从 `0` 开始，默认 `0` |
+| `article` | object | Yes | 完整的替换文章对象 |
+| `appid` | string | No | 覆盖环境变量，仅建议开发调试使用 |
+| `secret` | string | No | 覆盖环境变量，仅建议开发调试使用 |
+
+`article` 常用字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `title` | string | Yes | 文章标题，不能为空 |
+| `content` | string | Yes | 正文 HTML，少于 2 万字符且小于 1 MB |
+| `article_type` | string | No | `news` 或 `newspic`，默认 `news` |
+| `author` | string | No | 作者 |
+| `digest` | string | No | 摘要 |
+| `content_source_url` | string | No | “阅读原文”链接 |
+| `thumb_media_id` | string | No | 永久封面素材 MediaID |
+| `need_open_comment` | integer | No | `0` 关闭评论，`1` 开启评论 |
+| `only_fans_can_comment` | integer | No | `0` 所有人可评论，`1` 仅粉丝可评论 |
+| `image_info` | object | No | 图片消息信息，最多 20 张图片 |
+| `cover_info` | object | No | 封面裁剪信息 |
+| `product_info` | object | No | 商品信息 |
+
+```bash
+curl -X PUT 'http://localhost:8000/v1/wechat/drafts/draft-media-id' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "index": 0,
+    "article": {
+      "title": "更新后的标题",
+      "author": "作者",
+      "digest": "更新后的摘要",
+      "content": "<p>更新后的正文</p>",
+      "thumb_media_id": "thumb-media-id",
+      "need_open_comment": 0,
+      "only_fans_can_comment": 0
+    }
+  }'
+```
+
+成功响应：
+
+```json
+{
+  "media_id": "draft-media-id",
+  "index": 0,
+  "updated": true
+}
+```
+
+更新是完整文章替换。建议先调用详情接口取得原文章对象，在保留需要字段的基础上修改，
+不要只发送标题而遗漏正文、封面等信息。
+
+##### Delete draft
+
 - **DELETE** `/v1/wechat/drafts/<media_id>`
-  - Permanently deletes the draft and returns
-    `{"media_id": "...", "deleted": true}`.
+
+> **警告：删除不可撤销。** 调用前必须确认 `media_id`，接口不会提供恢复能力。
+
+```bash
+curl -X DELETE 'http://localhost:8000/v1/wechat/drafts/draft-media-id'
+```
+
+成功响应：
+
+```json
+{
+  "media_id": "draft-media-id",
+  "deleted": true
+}
+```
+
+##### Draft API errors
+
+| HTTP 状态码 | 场景 |
+| :--- | :--- |
+| `400` | 本地参数格式/范围错误，或微信拒绝文章内容、索引、评论配置等参数 |
+| `404` | 微信返回 `40007 invalid media_id` |
+| `502` | 微信网络异常、非 JSON 响应、鉴权/权限失败或其他上游错误 |
+
+微信业务错误响应会保留结构化信息：
+
+```json
+{
+  "error": "invalid media_id",
+  "wechat_errcode": 40007,
+  "operation": "get"
+}
+```
+
+`operation` 可能是 `batchget`、`get`、`update` 或 `delete`。响应不会包含
+AppSecret 或 access token。
 
 Sample request:
 ```bash
