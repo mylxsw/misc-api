@@ -3,7 +3,7 @@ description: "春日清新风格：自然鼠尾草绿、胶囊标题与柔和圆
 colors:
   primary: "#6b9b7a"
   secondary: "#86ad92"
-  text: "#34433a"
+  text: "#222222"
   text_light: "#708077"
   background: "#ffffff"
   code_bg: "#f2f7f3"
@@ -17,7 +17,7 @@ colors:
   border_radius: "12px"
   darkmode:
     background: "#1b211d"
-    text: "#d6e0d8"
+    text: "#e6e6e6"
     text_light: "#a1afa5"
     primary: "#91bea0"
     code_bg: "#252e28"
@@ -29,7 +29,7 @@ base_css: |
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     font-size: 16px;
     line-height: 1.78;
-    color: #34433a;
+    color: #222222;
     background: #ffffff;
     max-width: 720px;
     margin: 0 auto;
@@ -105,7 +105,7 @@ base_css: |
     font-size: 16px;
     line-height: 1.78;
     letter-spacing: 0.04em;
-    color: #34433a;
+    color: #222222;
     margin: 18px 8px;
   }
 
@@ -180,14 +180,14 @@ base_css: |
   li {
     font-size: 16px;
     line-height: 1.78;
-    color: #34433a;
+    color: #222222;
     margin: 7px 0;
   }
 
   table {
     width: 100%;
     border-collapse: collapse;
-    color: #34433a;
+    color: #222222;
     margin: 16px 8px;
     border: 1px solid #dde8dd;
     font-size: 15px;
@@ -208,7 +208,7 @@ base_css: |
   }
 
   td {
-    color: #34433a;
+    color: #222222;
     background: transparent;
     padding: 7.2px 12px;
     border: 1px solid #dde8dd;
@@ -246,7 +246,7 @@ base_css: |
   }
 
   figure {
-    color: #34433a;
+    color: #222222;
     margin: 20px 8px;
   }
 

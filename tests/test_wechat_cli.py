@@ -19,6 +19,11 @@ class WeChatCliTest(unittest.TestCase):
         self.assertIn('id="wechat-content"', document)
         self.assertIn('<p style="color: red">正文</p>', document)
         self.assertIn("ClipboardItem", document)
+        self.assertIn('id="theme-button"', document)
+        self.assertIn("暗色预览", document)
+        self.assertIn("data-preview-theme", document)
+        self.assertIn("data-darkmode-color", document)
+        self.assertIn("copyableHtml()", document)
         self.assertIn("&lt;标题&gt;", document)
         self.assertNotIn("<title><标题></title>", document)
 
@@ -43,6 +48,8 @@ class WeChatCliTest(unittest.TestCase):
         )
 
         self.assertIn("background: #6b9b7a", result.html)
+        self.assertIn("color: #333", result.html)
+        self.assertIn('data-darkmode-color="#e6e6e6"', result.html)
         self.assertIn("border-radius: 999px", result.html)
         self.assertIn("border-left: 5px solid #6b9b7a", result.html)
         self.assertIn("background: #f3f7f4", result.html)

@@ -34,18 +34,29 @@ def build_preview_document(
 {base_tag}    <title>{escaped_title}</title>
     <style>
         :root {{ color-scheme: light; }}
+        :root[data-preview-theme="dark"] {{ color-scheme: dark; }}
         * {{ box-sizing: border-box; }}
-        body {{ margin: 0; background: #f4f5f7; color: #1f2329; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
-        .toolbar {{ position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 20px; background: rgba(255, 255, 255, .96); border-bottom: 1px solid #e5e6eb; box-shadow: 0 2px 8px rgba(0, 0, 0, .04); }}
+        body {{ margin: 0; background: #f4f5f7; color: #1f2329; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; transition: background-color .2s ease, color .2s ease; }}
+        .toolbar {{ position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 20px; background: rgba(255, 255, 255, .96); border-bottom: 1px solid #e5e6eb; box-shadow: 0 2px 8px rgba(0, 0, 0, .04); transition: background-color .2s ease, border-color .2s ease; }}
         .toolbar-info {{ min-width: 0; }}
         .toolbar-title {{ overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }}
         .toolbar-meta {{ margin-top: 2px; color: #86909c; font-size: 12px; }}
+        .toolbar-actions {{ display: flex; flex: none; align-items: center; gap: 8px; }}
+        .theme-button {{ padding: 8px 12px; border: 1px solid #d9dce1; border-radius: 7px; background: #fff; color: #4e5969; cursor: pointer; font-size: 14px; }}
+        .theme-button:hover {{ background: #f2f3f5; }}
+        .theme-button:focus-visible, .copy-button:focus-visible {{ outline: 3px solid rgba(7, 193, 96, .25); outline-offset: 2px; }}
         .copy-button {{ flex: none; padding: 9px 18px; border: 0; border-radius: 7px; background: #07c160; color: #fff; cursor: pointer; font-size: 14px; font-weight: 600; }}
         .copy-button:hover {{ background: #06ad56; }}
-        .copy-button:focus-visible {{ outline: 3px solid rgba(7, 193, 96, .25); outline-offset: 2px; }}
         .copy-button[data-state="success"] {{ background: #00a870; }}
         .copy-button[data-state="error"] {{ background: #f53f3f; }}
-        .preview-shell {{ width: min(100% - 32px, 720px); margin: 24px auto 64px; padding: 32px 40px; background: #fff; box-shadow: 0 4px 24px rgba(0, 0, 0, .08); }}
+        .preview-shell {{ width: min(100% - 32px, 720px); margin: 24px auto 64px; padding: 32px 40px; background: #fff; box-shadow: 0 4px 24px rgba(0, 0, 0, .08); transition: background-color .2s ease, box-shadow .2s ease; }}
+        :root[data-preview-theme="dark"] body {{ background: #111315; color: #e6e6e6; }}
+        :root[data-preview-theme="dark"] .toolbar {{ background: rgba(30, 32, 35, .96); border-color: #34373c; }}
+        :root[data-preview-theme="dark"] .toolbar-meta {{ color: #9ca3ad; }}
+        :root[data-preview-theme="dark"] .theme-button {{ border-color: #454950; background: #292c31; color: #e6e6e6; }}
+        :root[data-preview-theme="dark"] .theme-button:hover {{ background: #34383e; }}
+        :root[data-preview-theme="dark"] .preview-shell {{ background: #1b211d; box-shadow: 0 4px 24px rgba(0, 0, 0, .35); }}
+        @media (prefers-reduced-motion: reduce) {{ body, .toolbar, .preview-shell {{ transition: none; }} }}
         @media (max-width: 600px) {{ .toolbar {{ padding: 10px 12px; }} .preview-shell {{ width: 100%; margin: 0; padding: 24px 18px; box-shadow: none; }} }}
     </style>
 </head>
@@ -55,14 +66,53 @@ def build_preview_document(
             <div class="toolbar-title">{escaped_title}</div>
             <div class="toolbar-meta">主题：{escaped_theme}</div>
         </div>
-        <button id="copy-button" class="copy-button" type="button">复制到公众号</button>
+        <div class="toolbar-actions">
+            <button id="theme-button" class="theme-button" type="button" aria-pressed="false">暗色预览</button>
+            <button id="copy-button" class="copy-button" type="button">复制到公众号</button>
+        </div>
     </header>
     <main class="preview-shell">
         <section id="wechat-content">{body_html}</section>
     </main>
     <script>
         const button = document.getElementById('copy-button');
+        const themeButton = document.getElementById('theme-button');
         const content = document.getElementById('wechat-content');
+        const darkmodeElements = Array.from(content.querySelectorAll('[data-darkmode-color], [data-darkmode-bgcolor]'));
+        const lightStyles = new Map(darkmodeElements.map((element) => [element, {{
+            color: element.style.color,
+            backgroundColor: element.style.backgroundColor,
+        }}]));
+        let darkPreview = false;
+
+        function applyPreviewTheme(dark) {{
+            darkPreview = dark;
+            document.documentElement.dataset.previewTheme = dark ? 'dark' : 'light';
+            themeButton.textContent = dark ? '亮色预览' : '暗色预览';
+            themeButton.setAttribute('aria-pressed', String(dark));
+
+            darkmodeElements.forEach((element) => {{
+                const light = lightStyles.get(element);
+                element.style.color = dark && element.dataset.darkmodeColor
+                    ? element.dataset.darkmodeColor
+                    : light.color;
+                element.style.backgroundColor = dark && element.dataset.darkmodeBgcolor
+                    ? element.dataset.darkmodeBgcolor
+                    : light.backgroundColor;
+            }});
+        }}
+
+        function copyableHtml() {{
+            const clone = content.cloneNode(true);
+            const clonedDarkmodeElements = Array.from(clone.querySelectorAll('[data-darkmode-color], [data-darkmode-bgcolor]'));
+            darkmodeElements.forEach((element, index) => {{
+                const light = lightStyles.get(element);
+                const clonedElement = clonedDarkmodeElements[index];
+                clonedElement.style.color = light.color;
+                clonedElement.style.backgroundColor = light.backgroundColor;
+            }});
+            return clone.innerHTML;
+        }}
 
         function setButtonState(text, state) {{
             button.textContent = text;
@@ -74,20 +124,29 @@ def build_preview_document(
         }}
 
         function fallbackCopy() {{
-            const selection = window.getSelection();
-            const range = document.createRange();
-            range.selectNodeContents(content);
-            selection.removeAllRanges();
-            selection.addRange(range);
-            const copied = document.execCommand('copy');
-            selection.removeAllRanges();
-            if (!copied) throw new Error('copy command failed');
+            const restoreDarkPreview = darkPreview;
+            if (restoreDarkPreview) applyPreviewTheme(false);
+            try {{
+                const selection = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(content);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                const copied = document.execCommand('copy');
+                selection.removeAllRanges();
+                if (!copied) throw new Error('copy command failed');
+            }} finally {{
+                if (restoreDarkPreview) applyPreviewTheme(true);
+            }}
         }}
+
+        themeButton.addEventListener('click', () => applyPreviewTheme(!darkPreview));
+        applyPreviewTheme(false);
 
         button.addEventListener('click', async () => {{
             try {{
                 if (navigator.clipboard && window.ClipboardItem) {{
-                    const rich = new Blob([content.innerHTML], {{ type: 'text/html' }});
+                    const rich = new Blob([copyableHtml()], {{ type: 'text/html' }});
                     const plain = new Blob([content.innerText], {{ type: 'text/plain' }});
                     await navigator.clipboard.write([new ClipboardItem({{
                         'text/html': rich,
