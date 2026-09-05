@@ -51,7 +51,11 @@ class WeChatDraftAPITest(unittest.TestCase):
     @patch("server.get_access_token", return_value="token")
     @patch("server.update_draft")
     def test_update_draft(self, update_draft, _token):
-        article = {"title": "标题", "content": "<p>正文</p>"}
+        article = {
+            "title": "标题",
+            "content": "<p>正文</p>",
+            "thumb_media_id": "thumb-1",
+        }
 
         with app.test_client() as client:
             response = client.put(
@@ -62,6 +66,92 @@ class WeChatDraftAPITest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["updated"], True)
         update_draft.assert_called_once_with("token", "media-1", 0, article)
+
+    @patch("server.upload_thumb_bytes", return_value="new-thumb")
+    @patch("server.load_image_bytes", return_value=(b"image", "cover.jpg"))
+    @patch("server.get_access_token", return_value="token")
+    @patch("server.update_draft")
+    def test_update_reuploads_request_thumb_url(
+        self, update_draft, _token, load_image, upload_thumb
+    ):
+        article = {
+            "title": "标题",
+            "content": "<p>正文</p>",
+            "thumb_media_id": "",
+            "thumb_url": "https://example.com/cover.jpg",
+            "url": "https://example.com/read-only",
+        }
+
+        with app.test_client() as client:
+            response = client.put(
+                "/v1/wechat/drafts/media-1",
+                json={"appid": "appid", "secret": "secret", "article": article},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get_json(),
+            {
+                "media_id": "media-1",
+                "index": 0,
+                "updated": True,
+                "cover_reuploaded": True,
+                "thumb_media_id": "new-thumb",
+            },
+        )
+        load_image.assert_called_once_with("https://example.com/cover.jpg")
+        upload_thumb.assert_called_once_with("token", b"image", "cover.jpg")
+        update_draft.assert_called_once_with(
+            "token",
+            "media-1",
+            0,
+            {
+                "title": "标题",
+                "content": "<p>正文</p>",
+                "thumb_media_id": "new-thumb",
+            },
+        )
+
+    @patch("server.upload_thumb_bytes", return_value="new-thumb")
+    @patch("server.load_image_bytes", return_value=(b"image", "cover.png"))
+    @patch("server.get_draft")
+    @patch("server.get_access_token", return_value="token")
+    @patch("server.update_draft")
+    def test_update_recovers_thumb_url_from_existing_draft(
+        self, update_draft, _token, get_draft, load_image, upload_thumb
+    ):
+        get_draft.return_value = {
+            "news_item": [{"thumb_url": "https://example.com/existing.png"}]
+        }
+        article = {"title": "标题", "content": "<p>正文</p>"}
+
+        with app.test_client() as client:
+            response = client.put(
+                "/v1/wechat/drafts/media-1",
+                json={"appid": "appid", "secret": "secret", "article": article},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["cover_reuploaded"])
+        get_draft.assert_called_once_with("token", "media-1")
+        load_image.assert_called_once_with("https://example.com/existing.png")
+        upload_thumb.assert_called_once_with("token", b"image", "cover.png")
+
+    @patch("server.get_draft", return_value={"news_item": [{}]})
+    @patch("server.get_access_token", return_value="token")
+    def test_update_rejects_news_without_available_cover(self, _token, _get_draft):
+        with app.test_client() as client:
+            response = client.put(
+                "/v1/wechat/drafts/media-1",
+                json={
+                    "appid": "appid",
+                    "secret": "secret",
+                    "article": {"title": "标题", "content": "<p>正文</p>"},
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("no cover image", response.get_json()["error"])
 
     @patch("server.get_access_token", return_value="token")
     @patch("server.delete_draft")

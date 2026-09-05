@@ -42,6 +42,9 @@ def _post_draft_api(
             timeout=API_TIMEOUT,
         )
         response.raise_for_status()
+        # WeChat JSON responses are UTF-8 but may omit a charset, causing
+        # requests to decode Chinese text as ISO-8859-1.
+        response.encoding = "utf-8"
         data = response.json()
     except requests.RequestException as exc:
         raise WeChatDraftAPIError(operation, "transport_error", str(exc)) from exc

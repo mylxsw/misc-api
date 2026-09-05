@@ -56,6 +56,16 @@ class WeChatPublisherTest(unittest.TestCase):
         self.assertEqual(json.loads(post.call_args_list[2].kwargs["data"]), {"media_id": "media-1"})
 
     @patch("lib.wechat.publisher.requests.post")
+    def test_response_is_decoded_as_utf8(self, post):
+        response = self._response({"news_item": [{"title": "中文标题"}]})
+        post.return_value = response
+
+        result = get_draft("token", "media-1")
+
+        self.assertEqual(response.encoding, "utf-8")
+        self.assertEqual(result["news_item"][0]["title"], "中文标题")
+
+    @patch("lib.wechat.publisher.requests.post")
     def test_wechat_error_is_structured(self, post):
         post.return_value = self._response({"errcode": 40007, "errmsg": "invalid media_id"})
 

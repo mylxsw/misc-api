@@ -941,7 +941,7 @@ def wechat_draft_detail_endpoint(media_id):
 
 @app.route("/v1/wechat/drafts/<path:media_id>", methods=["PUT"])
 def wechat_draft_update_endpoint(media_id):
-    """Update one article in a draft."""
+    """Update one article in a draft, repairing a missing cover media ID."""
     media_id = media_id.strip()
     if not media_id:
         return jsonify({"error": "parameter 'media_id' is required"}), 400
@@ -962,8 +962,48 @@ def wechat_draft_update_endpoint(media_id):
 
     try:
         index = _parse_wechat_int(payload.get("index", 0), "index", 0)
-        update_draft(_wechat_token(payload), media_id, index, article)
-        return jsonify({"media_id": media_id, "index": index, "updated": True})
+        token = _wechat_token(payload)
+        article = article.copy()
+
+        # Draft detail responses contain read-only URLs that the update API does
+        # not accept. Keep thumb_url only as a possible source for repairing an
+        # empty permanent thumbnail media ID.
+        cover = payload.get("cover") or article.pop("thumb_url", None)
+        article.pop("url", None)
+
+        cover_reuploaded = False
+        article_type = article.get("article_type") or "news"
+        if article_type == "news" and not article.get("thumb_media_id"):
+            if not cover:
+                current = get_draft(token, media_id)
+                news_items = current.get("news_item") or []
+                if index >= len(news_items):
+                    raise ValueError(
+                        f"parameter 'index' is out of range for draft with {len(news_items)} articles"
+                    )
+                cover = news_items[index].get("thumb_url")
+
+            if not cover:
+                raise ValueError(
+                    "article.thumb_media_id is required for news articles and no cover image is available"
+                )
+
+            cover_data, cover_name = load_image_bytes(cover)
+            article["thumb_media_id"] = upload_thumb_bytes(
+                token, cover_data, cover_name
+            )
+            cover_reuploaded = True
+
+        update_draft(token, media_id, index, article)
+        response = {"media_id": media_id, "index": index, "updated": True}
+        if cover_reuploaded:
+            response.update(
+                {
+                    "cover_reuploaded": True,
+                    "thumb_media_id": article["thumb_media_id"],
+                }
+            )
+        return jsonify(response)
     except WeChatDraftAPIError as exc:
         return _wechat_draft_error_response(exc)
     except ValueError as exc:

@@ -645,6 +645,7 @@ curl 'http://localhost:8000/v1/wechat/drafts/draft-media-id'
 | :--- | :--- | :--- | :--- |
 | `index` | integer | No | 要更新的文章位置，从 `0` 开始，默认 `0` |
 | `article` | object | Yes | 完整的替换文章对象 |
+| `cover` | string | No | 封面图片 URL、data URI 或 base64；当 `thumb_media_id` 为空时上传为永久素材 |
 | `appid` | string | No | 覆盖环境变量，仅建议开发调试使用 |
 | `secret` | string | No | 覆盖环境变量，仅建议开发调试使用 |
 
@@ -693,7 +694,11 @@ curl -X PUT 'http://localhost:8000/v1/wechat/drafts/draft-media-id' \
 ```
 
 更新是完整文章替换。建议先调用详情接口取得原文章对象，在保留需要字段的基础上修改，
-不要只发送标题而遗漏正文、封面等信息。
+不要只发送标题而遗漏正文、封面等信息。对于 `news` 文章，如果 `thumb_media_id` 为空，
+接口会依次尝试顶层 `cover`、文章中的 `thumb_url`，以及原草稿详情中的 `thumb_url`，
+将封面重新上传为永久素材后再更新。执行补传时，成功响应还会包含
+`cover_reuploaded: true` 和新的 `thumb_media_id`。详情响应中的 `thumb_url`、`url`
+属于只读字段，不会传给微信更新接口。
 
 ##### Delete draft
 
