@@ -809,6 +809,77 @@ def wechat_preview_endpoint():
     )
 
 
+@app.route("/v1/wechat/images/draft", methods=["POST"])
+def wechat_image_draft_endpoint():
+    """Upload ordered permanent images and create one native picture draft."""
+    from lib.wechat.image_post import (
+        create_image_draft,
+        validate_image_post,
+        validate_picture,
+    )
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "request body must be a JSON object"}), 400
+    try:
+        prepared = validate_image_post(payload)
+        _wechat_credentials(payload)
+    except (ValueError, TypeError) as exc:
+        return jsonify({"error": str(exc), "stage": "validation"}), 400
+
+    # Resolve every file first: a broken last page must not create a partial post.
+    pictures = []
+    try:
+        for source in prepared["images"]:
+            data, filename = load_image_bytes(source)
+            validate_picture(data)
+            pictures.append((data, filename))
+    except Exception:
+        return jsonify({
+            "error": "could not load a valid PNG/JPEG image (maximum 10 MiB)",
+            "stage": "validation",
+            "image_index": len(pictures),
+        }), 400
+
+    image_media_ids = []
+    try:
+        token = _wechat_token(payload)
+        for data, filename in pictures:
+            media_id = upload_thumb_bytes(token, data, filename)
+            if not isinstance(media_id, str) or not media_id.strip():
+                raise ValueError("missing permanent image media ID")
+            image_media_ids.append(media_id)
+    except Exception:
+        return jsonify({
+            "error": "permanent image upload failed; no draft creation was attempted",
+            "stage": "upload",
+            "images_uploaded": len(image_media_ids),
+            "image_media_ids": image_media_ids,
+        }), 502
+
+    try:
+        draft = create_image_draft(
+            token, prepared["title"], prepared["content"], image_media_ids,
+            prepared["need_open_comment"], prepared["only_fans_can_comment"],
+        )
+    except Exception:
+        # Transport errors can contain a token in their URL; never echo them.
+        # The request may have succeeded at WeChat even without a local response.
+        return jsonify({
+            "error": "draft creation was not confirmed; inspect drafts before retrying",
+            "stage": "create",
+            "outcome": "uncertain",
+            "image_media_ids": image_media_ids,
+        }), 502
+    return jsonify({
+        "media_id": draft.media_id,
+        "article_type": "newspic",
+        "title": prepared["title"],
+        "images_uploaded": len(image_media_ids),
+        "image_media_ids": image_media_ids,
+    })
+
+
 @app.route("/v1/wechat/markdown/draft", methods=["POST"])
 def wechat_draft_endpoint():
     """Convert Markdown and push it into the WeChat Official Account draft box.

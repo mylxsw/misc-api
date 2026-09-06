@@ -85,10 +85,47 @@ docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
 - [`GET /v1/wechat/markdown/themes`](#list-wechat-themes)：获取微信公众号 Markdown 排版支持的主题。
 - [`POST /v1/wechat/markdown/preview`](#preview-wechat-article)：将 Markdown 转换为可预览或粘贴到微信编辑器的 HTML。
 - [`POST /v1/wechat/markdown/draft`](#publish-wechat-draft)：将 Markdown 文章及图片上传到微信公众号草稿箱。
+- [`POST /v1/wechat/images/draft`](#create-picture-draft)：将有序图片和纯文本创建为微信原生贴图草稿。
 - [`GET /v1/wechat/drafts`](#manage-wechat-drafts)：分页查询微信公众号草稿列表。
 - [`GET /v1/wechat/drafts/<media_id>`](#get-draft-detail)：查询指定草稿详情。
 - [`PUT /v1/wechat/drafts/<media_id>`](#update-draft)：更新草稿中的指定文章。
 - [`DELETE /v1/wechat/drafts/<media_id>`](#delete-draft)：永久删除指定草稿。
+
+### Create picture draft
+
+- **POST** `/v1/wechat/images/draft`
+- 认证复用 `X-WeChat-AppId` / `X-WeChat-AppSecret` 请求头，或既有 `appid` / `secret` 请求体和环境变量配置。不要把凭证放进 URL。
+- 该接口创建一条 `article_type: newspic` 图片消息，保存到草稿箱，不发布、不群发。普通 Markdown 文章接口不变。
+
+```json
+{
+  "title": "贴图标题",
+  "content": "纯文本正文\n\n#漫画 #成长",
+  "images": ["https://cdn.example.com/page-01.png", "https://cdn.example.com/page-02.png"],
+  "need_open_comment": 0,
+  "only_fans_can_comment": 0
+}
+```
+
+`title` 为 1–32 个字符，`content` 为非空纯文本（不接受 HTML；本入口采用官方文档中较保守的 2048 UTF-8 字节上限）。`images` 为 1–20 个不重复的 HTTP(S) URL，仅接受有效的 PNG/JPEG，每张最多 10 MiB。首张图片是封面，图片顺序原样保留；本接口不裁剪或转码图片。两个留言字段可省略，值为整数 `0` 或 `1`。
+
+服务先校验全部参数和图片，再复用永久图片上传接口获取每张图的 `media_id`，最后一次性创建草稿。成功响应：
+
+```json
+{
+  "media_id": "draft-media-id",
+  "article_type": "newspic",
+  "title": "贴图标题",
+  "images_uploaded": 2,
+  "image_media_ids": ["permanent-image-1", "permanent-image-2"]
+}
+```
+
+调用方随后可用已有草稿详情接口核验标题、文案及 `image_info.image_list` 的顺序。创建成功后的读取失败不能触发重复创建。
+
+失败响应带 `stage`：`validation`（400，未上传微信素材）、`upload`（502，未尝试创建草稿，可能留下部分永久素材）、`create`（502，结果未确认，`outcome: uncertain`）。上传或创建失败会返回已经确认的 `image_media_ids`，不会静默创建缺页草稿，也不自动重试或删除素材。超时也可能意味着微信已经创建了草稿，必须先检查草稿列表；直接调用本接口没有服务端去重保证。
+
+来源：[微信官方新增草稿接口](https://developers.weixin.qq.com/doc/service/api/draftbox/draftmanage/api_draft_add)。
 
 ### List image providers and models
 
