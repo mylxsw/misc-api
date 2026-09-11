@@ -1,0 +1,222 @@
+name: "line-art"
+description: "极简黑白线稿风：纯白纸面、手写感标题与利落描边，适合漫画、随笔和轻知识内容"
+colors:
+  primary: "#111111"
+  secondary: "#4a4a4a"
+  text: "#202020"
+  text_light: "#666666"
+  background: "#ffffff"
+  code_bg: "#f7f7f7"
+  code_color: "#202020"
+  quote_border: "#111111"
+  quote_bg: "#fafafa"
+  reference_border: "#202020"
+  reference_bg: "#ffffff"
+  reference_text: "#333333"
+  reference_radius: "0px"
+  border_radius: "0px"
+  darkmode:
+    background: "#171717"
+    text: "#dedede"
+    text_light: "#aaaaaa"
+    primary: "#ffffff"
+    code_bg: "#242424"
+    code_color: "#e5e5e5"
+    quote_bg: "#202020"
+    quote_border: "#dedede"
+base_css: |
+  body {
+    font-family: "Kaiti SC", STKaiti, KaiTi, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 16px;
+    line-height: 1.9;
+    color: #202020;
+    background: #ffffff;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 20px 18px;
+    word-wrap: break-word;
+    letter-spacing: 0.03em;
+  }
+
+  h1 {
+    font-family: "Kaiti SC", STKaiti, KaiTi, "PingFang SC", sans-serif;
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.45;
+    color: #111111;
+    text-align: center;
+    margin: 36px 0 28px;
+    padding: 0 0 14px;
+    border-bottom: 3px solid currentColor;
+    letter-spacing: 0.08em;
+  }
+
+  h2 {
+    font-family: "Kaiti SC", STKaiti, KaiTi, "PingFang SC", sans-serif;
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.5;
+    color: #111111;
+    margin: 34px 0 16px;
+    padding: 7px 12px;
+    border: 2px solid currentColor;
+    letter-spacing: 0.05em;
+  }
+
+  h3 {
+    font-family: "Kaiti SC", STKaiti, KaiTi, "PingFang SC", sans-serif;
+    font-size: 19px;
+    font-weight: 700;
+    line-height: 1.5;
+    color: #111111;
+    margin: 28px 0 12px;
+    padding: 0 0 5px;
+    border-bottom: 2px solid currentColor;
+  }
+
+  h4 {
+    font-size: 17px;
+    font-weight: 700;
+    line-height: 1.5;
+    color: #202020;
+    margin: 22px 0 10px;
+    padding-left: 10px;
+    border-left: 3px solid currentColor;
+  }
+
+  p {
+    font-size: 16px;
+    line-height: 1.9;
+    color: #202020;
+    margin: 14px 0;
+  }
+
+  strong {
+    font-weight: 700;
+    color: #000000;
+    border-bottom: 2px solid currentColor;
+  }
+
+  em {
+    font-style: normal;
+    color: #555555;
+  }
+
+  code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 14px;
+    color: #202020;
+    background: #f7f7f7;
+    padding: 2px 5px;
+    border: 1px solid currentColor;
+    border-radius: 0;
+  }
+
+  pre {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 14px;
+    line-height: 1.65;
+    color: #202020;
+    background: #f7f7f7;
+    margin: 20px 0;
+    padding: 16px;
+    border: 2px solid currentColor;
+    border-radius: 0;
+    overflow-x: auto;
+  }
+
+  pre code {
+    color: #202020;
+    background: transparent;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+  }
+
+  blockquote {
+    font-family: "Kaiti SC", STKaiti, KaiTi, "PingFang SC", sans-serif;
+    font-size: 16px;
+    line-height: 1.85;
+    color: #444444;
+    background: #fafafa;
+    margin: 22px 0;
+    padding: 14px 18px;
+    border: 2px solid currentColor;
+    border-radius: 0;
+  }
+
+  blockquote p {
+    color: #444444;
+    margin: 4px 0;
+  }
+
+  ul {
+    margin: 14px 0;
+    padding-left: 24px;
+  }
+
+  ol {
+    margin: 14px 0;
+    padding-left: 24px;
+  }
+
+  li {
+    font-size: 16px;
+    line-height: 1.85;
+    color: #202020;
+    margin: 7px 0;
+    padding-left: 2px;
+  }
+
+  table {
+    width: 100%;
+    margin: 22px 0;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+
+  thead {
+    background: #111111;
+  }
+
+  th {
+    color: #ffffff;
+    background: #111111;
+    font-weight: 700;
+    text-align: left;
+    padding: 10px 12px;
+    border: 2px solid currentColor;
+  }
+
+  td {
+    color: #202020;
+    background: #ffffff;
+    padding: 10px 12px;
+    border: 1px solid currentColor;
+  }
+
+  tr {
+    background: #ffffff;
+  }
+
+  img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 26px auto;
+    border: none;
+    border-radius: 0;
+  }
+
+  a {
+    color: #111111;
+    font-weight: 600;
+    text-decoration: none;
+    border-bottom: 1px solid currentColor;
+  }
+
+  hr {
+    border: none;
+    border-top: 2px solid currentColor;
+    margin: 32px 25%;
+  }

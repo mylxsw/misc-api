@@ -55,7 +55,7 @@ def build_preview_document(
         :root[data-preview-theme="dark"] .toolbar-meta {{ color: #9ca3ad; }}
         :root[data-preview-theme="dark"] .theme-button {{ border-color: #454950; background: #292c31; color: #e6e6e6; }}
         :root[data-preview-theme="dark"] .theme-button:hover {{ background: #34383e; }}
-        :root[data-preview-theme="dark"] .preview-shell {{ background: #1b211d; box-shadow: 0 4px 24px rgba(0, 0, 0, .35); }}
+        :root[data-preview-theme="dark"] .preview-shell {{ background: #111111; box-shadow: 0 4px 24px rgba(0, 0, 0, .35); }}
         @media (prefers-reduced-motion: reduce) {{ body, .toolbar, .preview-shell {{ transition: none; }} }}
         @media (max-width: 600px) {{ .toolbar {{ padding: 10px 12px; }} .preview-shell {{ width: 100%; margin: 0; padding: 24px 18px; box-shadow: none; }} }}
     </style>

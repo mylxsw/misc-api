@@ -388,13 +388,20 @@ class WeChatConverter:
         dm_bg = darkmode.get("background", "#1e1e1e")
         dm_primary = darkmode.get("primary", "#6aadff")
 
-        # Body-level elements (p, li, section, span)
-        for tag_name in ("p", "span", "section"):
+        # Body-level elements whose text and line decoration should follow dark mode.
+        for tag_name in ("p", "span", "section", "li", "td", "a", "hr"):
             for elem in soup.find_all(tag_name):
                 style = elem.get("style", "")
                 # Only set if element has a color
                 if "color" in style:
                     elem["data-darkmode-color"] = dm_text
+                    elem["data-darkmode-bgcolor"] = "transparent"
+
+        # Table rows carry a light background but no text color of their own.
+        for tag_name in ("table", "thead", "tbody", "tr"):
+            for elem in soup.find_all(tag_name):
+                style = elem.get("style", "")
+                if "background" in style:
                     elem["data-darkmode-bgcolor"] = "transparent"
 
         # Headings
@@ -412,6 +419,7 @@ class WeChatConverter:
             pre["data-darkmode-color"] = dm_code_color
         for code in soup.find_all("code"):
             code["data-darkmode-color"] = dm_code_color
+            code["data-darkmode-bgcolor"] = dm_code_bg
 
         # Blockquotes
         dm_quote_bg = darkmode.get("quote_bg", "#2a2a2a")

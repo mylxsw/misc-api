@@ -497,7 +497,7 @@ PY
 
 ### Markdown → WeChat (公众号排版与草稿推送)
 
-Convert Markdown into WeChat-compatible inline-style HTML (19 built-in themes,
+Convert Markdown into WeChat-compatible inline-style HTML (20 built-in themes,
 CJK spacing fixes, dark-mode attributes, list/link/code-block handling), then
 either preview it or push it straight into the Official Account draft box.
 
@@ -519,6 +519,7 @@ available to both the CLI and the API automatically. List them at runtime with
 | `github` | GitHub 风格：白底蓝色链接，等宽代码块，适合技术文档和开发者内容 |
 | `impeccable` | 基于 Impeccable 设计语言，衬线正文+无衬线标题，深青+琥珀双色 |
 | `ink` | 水墨中国风：宣纸底墨色文字，中文衬线字体，适合文化和人文内容 |
+| `line-art` | 极简黑白线稿风：纯白纸面、手写感标题与利落描边，适合漫画、随笔和轻知识内容 |
 | `lobster-notes` | 军哥龙虾笔记专属：橙红主调，深色代码块，移动端优先教学风 |
 | `midnight` | 午夜深色主题：深蓝黑底白色文字，适合技术和深夜阅读内容 |
 | `minimal` | 极简黑白灰风格，无色彩干扰，内容至上 |

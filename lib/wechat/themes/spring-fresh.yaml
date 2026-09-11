@@ -16,7 +16,7 @@ colors:
   reference_radius: "14px"
   border_radius: "12px"
   darkmode:
-    background: "#1b211d"
+    background: "#111111"
     text: "#e6e6e6"
     text_light: "#a1afa5"
     primary: "#91bea0"
@@ -62,7 +62,6 @@ base_css: |
     margin: 36.8px auto 18.4px;
     padding: 4px 13.6px;
     border-radius: 999px;
-    box-shadow: 0 4px 14px rgba(107, 155, 122, 0.28);
   }
 
   h3 {
@@ -127,7 +126,6 @@ base_css: |
     padding: 16px 19.2px;
     border-left: 5px solid #6b9b7a;
     border-radius: 12px;
-    box-shadow: inset 0 0 16px rgba(107, 155, 122, 0.1);
   }
 
   blockquote p {
@@ -154,7 +152,6 @@ base_css: |
     border-radius: 14px;
     overflow-x: auto;
     line-height: 1.6;
-    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.04);
   }
 
   pre code {
@@ -222,7 +219,6 @@ base_css: |
     margin: 20px auto 10px;
     border: 1px solid #edf3ef;
     border-radius: 14px;
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.05);
   }
 
   a {

@@ -61,6 +61,27 @@ class WeChatCliTest(unittest.TestCase):
         self.assertIn("这是一段参考说明。", result.html)
         self.assertIn("data-darkmode-bgcolor", result.html)
 
+    def test_line_art_theme_is_available_and_inlines_key_styles(self):
+        self.assertIn("line-art", list_themes())
+
+        theme = load_theme("line-art")
+        result = WeChatConverter(theme=theme).convert(
+            "# 一句话原则\n\n## 只留一句\n\n正文中的 **重点** 和 `代码`。\n\n> 这是一张线框便签。\n\n- 列表项\n\n| 名称 | 值 |\n| --- | --- |\n| 风格 | 线稿 |\n\n```text\nkeep it simple\n```"
+        )
+
+        self.assertEqual(result.title, "一句话原则")
+        self.assertIn('font-family: "Kaiti SC"', result.html)
+        self.assertIn("border-bottom: 3px solid currentColor", theme.base_css)
+        self.assertIn("border: 2px solid currentColor", result.html)
+        self.assertIn("border-bottom: 2px solid currentColor", result.html)
+        self.assertIn("background: #fafafa", result.html)
+        self.assertIn('data-darkmode-color="#dedede"', result.html)
+        self.assertIn('data-darkmode-bgcolor="#202020"', result.html)
+        self.assertRegex(result.html, r'<section[^>]+data-darkmode-color="#dedede"')
+        self.assertRegex(result.html, r'<td[^>]+data-darkmode-bgcolor="transparent"')
+        self.assertRegex(result.html, r'<tr[^>]+data-darkmode-bgcolor="transparent"')
+        self.assertRegex(result.html, r'<code[^>]+data-darkmode-bgcolor="#242424"')
+
     def test_main_reports_unknown_theme(self):
         with tempfile.TemporaryDirectory() as directory:
             markdown_path = Path(directory) / "article.md"
