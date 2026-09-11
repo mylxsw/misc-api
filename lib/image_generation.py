@@ -581,6 +581,8 @@ IMAGE_MODEL_CATALOG = {
     },
     "apimart": {
         "models": [
+            "gpt-image-2.5-flare",
+            "grok-imagine-2.0-ext",
             "gpt-image-2",
             "gpt-image-2-ext",
             "gemini-3.1-flash-image-preview",
@@ -595,6 +597,10 @@ IMAGE_MODEL_CATALOG = {
     },
     "toapis": {
         "models": [
+            "gpt-image-2.5-flare",
+            "gpt-image-2.5-sunburst",
+            "gpt-image-2.5-flare-vip",
+            "gpt-image-2.5-sunburst-vip",
             "gpt-image-2",
             "gemini-3.1-flash-image-preview",
             "gemini-3-pro-image-preview",
