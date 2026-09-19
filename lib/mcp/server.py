@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Annotated, Any, Literal, TypedDict
+from typing import Annotated, Any, Literal
 
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
@@ -52,11 +52,6 @@ DESTRUCTIVE_OPEN = ToolAnnotations(
 def mcp_http_max_body_size() -> int:
     """Reuse the Flask request-body limit for Streamable HTTP."""
     return int(os.getenv("MAX_REQUEST_BYTES", str(85 * 1024 * 1024)))
-
-
-class PodcastScript(TypedDict):
-    speaker: str
-    text: str
 
 
 # --- Images -----------------------------------------------------------------
@@ -261,8 +256,14 @@ def get_cosyvoice_task(task_id: str) -> dict[str, Any]:
 @mcp.tool(annotations=MUTATING_OPEN)
 def create_podcast_task(
     scripts: Annotated[
-        list[PodcastScript],
-        Field(description="Ordered speaker/text turns. Use matching speaker series."),
+        list[dict[str, str]],
+        Field(
+            description=(
+                "Ordered speaker/text turns. Each item is "
+                '{"speaker": "<voice id>", "text": "<line>"}. '
+                "Use matching speaker series."
+            )
+        ),
     ],
     use_head_music: bool = False,
     use_tail_music: bool = False,

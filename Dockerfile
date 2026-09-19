@@ -25,6 +25,9 @@ RUN uv venv /app/.venv && \
 COPY . .
 RUN uv sync --no-dev
 
+# Fail the image build if gunicorn cannot import the combined app on Python 3.11.
+RUN python -c "from asgi import app"
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
