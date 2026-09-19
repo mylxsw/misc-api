@@ -20,10 +20,15 @@ dependencies = [
     "boto3>=1.43.83",
     "chardet<6",
     "urllib3>=2,<3",
+    "mcp>=2,<3",
+    "uvicorn>=0.53.0",
+    "a2wsgi>=1.10.10",
+    "starlette>=1.6.0",
 ]
 
 [project.scripts]
 wechat-markdown = "lib.wechat.cli:main"
+misc-api-mcp = "lib.mcp.__main__:main"
 
 [build-system]
 requires = ["setuptools>=68"]

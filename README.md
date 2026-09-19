@@ -7,7 +7,8 @@ A Flask-based HTTP API service that integrates multiple AI media generation capa
 - **Unified Image Generation**: Synchronous and asynchronous image generation through Alibaba Cloud, Ark, APIMart, ToAPIs, Google Gemini, or xAI.
 - **Image Stitching**: Utility to stitch multiple images vertically or horizontally.
 
-This service exposes these capabilities via simple RESTful endpoints, returning base64-encoded results.
+This service exposes these capabilities via RESTful endpoints and as
+[MCP](https://modelcontextprotocol.io) tools (Streamable HTTP at `/mcp`, or stdio).
 
 ## Requirements
 - Python 3.11+
@@ -48,17 +49,22 @@ The following environment variables are required to run the service:
 | `R2_KEY_PREFIX` | Optional object key prefix | No |
 | `WECHAT_APPID` | WeChat Official Account AppID (for draft creation and management) | Yes for WeChat APIs, unless supplied by the request |
 | `WECHAT_SECRET` | WeChat Official Account AppSecret (for draft creation and management) | Yes for WeChat APIs, unless supplied by the request |
+| `API_AUTH_TOKEN` | Shared bearer token for HTTP REST and MCP. When set, clients must send `Authorization: Bearer <token>` or `X-API-Key: <token>`. `/health` stays public. Unset means the HTTP surface is open (local/dev only) | Recommended for Docker and any network-exposed MCP |
 
 ## Quick start (local)
 ```bash
 # Install deps with uv (creates .venv)
 uv sync --no-dev
 
-# Run the API with variables already exported in the current shell
+# REST API + MCP (recommended). MCP is at http://localhost:8000/mcp
+uv run uvicorn asgi:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 600
+
+# REST only (no MCP)
 uv run python server.py
 
-# Or load a local .env file before starting (server.py does not load it automatically)
-set -a; . ./.env; set +a; uv run python server.py
+# Or load a local .env file before starting (the app does not load it automatically)
+set -a; . ./.env; set +a
+uv run uvicorn asgi:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 600
 ```
 The service listens on `http://localhost:8000`. Docker Compose automatically
 reads the project-level `.env` file for `${...}` substitutions.
@@ -66,13 +72,130 @@ reads the project-level `.env` file for `${...}` substitutions.
 ## Docker
 ```bash
 docker build -t cosyvoice-api .
-docker run -p 8000:8000 -e DASHSCOPE_API_KEY=your_key cosyvoice-api
+docker run -p 8000:8000 \
+  -e DASHSCOPE_API_KEY=your_key \
+  -e API_AUTH_TOKEN=your-shared-token \
+  cosyvoice-api
 ```
+
+Or `docker compose up --build`. The container serves **both** protocols on port 8000:
+
+| Surface | URL |
+| :--- | :--- |
+| REST | `http://localhost:8000/v1/...` |
+| MCP Streamable HTTP | `http://localhost:8000/mcp` |
+| Health | `http://localhost:8000/health` (`{"http": true, "mcp": true}`) |
+
+Set `API_AUTH_TOKEN` in `.env` / Compose. `/health` does not require the token.
+
+## MCP
+
+Every HTTP endpoint is also an MCP tool. The combined ASGI app (Docker / `uvicorn asgi:app`)
+exposes Streamable HTTP at:
+
+```
+http://localhost:8000/mcp
+```
+
+Tools call the existing Flask views in-process, so request validation and
+response bodies match the REST API. Prefer `return_url=true` for image tools
+when R2/S3 is configured, so clients do not ingest large Base64 payloads.
+
+### Authentication
+
+Remote MCP (and REST on the same port) can generate billed images, upload WeChat
+material, and delete drafts. When `API_AUTH_TOKEN` is set, both `/v1` and `/mcp`
+require:
+
+```http
+Authorization: Bearer <API_AUTH_TOKEN>
+```
+
+`X-API-Key: <API_AUTH_TOKEN>` is also accepted for REST clients. `/health` is
+unauthenticated so Docker/K8s probes keep working. stdio MCP does not use HTTP
+auth; it already runs as a local subprocess.
+
+If the token is unset, HTTP MCP/REST stay open so local development still works.
+Do not expose Docker without `API_AUTH_TOKEN`.
+
+### Transports
+
+| Transport | When to use | Command |
+| :--- | :--- | :--- |
+| Streamable HTTP | Remote / Docker / same port as the REST API | `uv run uvicorn asgi:app --host 0.0.0.0 --port 8000` |
+| stdio | Local Cursor / Claude Desktop | `uv run python -m lib.mcp` or `uv run misc-api-mcp` |
+| MCP-only HTTP | MCP without the REST API | `uv run python -m lib.mcp --transport streamable-http --port 8000` |
+
+### Client config
+
+Cursor / Claude Code (HTTP, after the API is running):
+
+```json
+{
+  "mcpServers": {
+    "misc-api": {
+      "url": "http://localhost:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer your-shared-token"
+      }
+    }
+  }
+}
+```
+
+```bash
+claude mcp add --transport http misc-api http://localhost:8000/mcp \
+  --header "Authorization: Bearer your-shared-token"
+```
+
+Local stdio (no HTTP server required; export the same env vars as the API):
+
+```json
+{
+  "mcpServers": {
+    "misc-api": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "lib.mcp"],
+      "cwd": "/path/to/misc-api"
+    }
+  }
+}
+```
+
+### Tools
+
+| MCP tool | HTTP API |
+| :--- | :--- |
+| `list_image_models` | `GET /v1/images/models` |
+| `generate_image` | `POST /v1/images/generations` |
+| `create_image_generation_task` | `POST /v1/images/generations/async` |
+| `get_image_generation_task` | `GET /v1/images/generations/async/<task_id>` |
+| `stitch_images` | `POST /v1/image/stitch` |
+| `cosyvoice_tts` | `POST /v1/voice/cosyvoice` |
+| `create_cosyvoice_task` | `POST /v1/voice/cosyvoice/async` |
+| `get_cosyvoice_task` | `GET /v1/voice/cosyvoice/async/<task_id>` |
+| `create_podcast_task` | `POST /v1/voice/podcast` |
+| `get_podcast_task` | `GET /v1/voice/podcast/<task_id>` |
+| `create_fish_audio_task` | `POST /v1/voice/fish-audio/text-to-speech` |
+| `get_fish_audio_task` | `GET /v1/voice/fish-audio/text-to-speech/<task_id>` |
+| `list_wechat_themes` | `GET /v1/wechat/markdown/themes` |
+| `preview_wechat_article` | `POST /v1/wechat/markdown/preview` |
+| `publish_wechat_draft` | `POST /v1/wechat/markdown/draft` |
+| `create_wechat_image_draft` | `POST /v1/wechat/images/draft` |
+| `list_wechat_drafts` | `GET /v1/wechat/drafts` |
+| `get_wechat_draft` | `GET /v1/wechat/drafts/<media_id>` |
+| `update_wechat_draft` | `PUT /v1/wechat/drafts/<media_id>` |
+| `delete_wechat_draft` | `DELETE /v1/wechat/drafts/<media_id>` |
+
+WeChat tools accept optional `appid` / `secret` and otherwise use
+`WECHAT_APPID` / `WECHAT_SECRET`, matching the HTTP API. `delete_wechat_draft`
+is permanent.
 
 ## API 详情
 
 ### API 概览
 
+- MCP Streamable HTTP：[`/mcp`](#mcp)（与 REST 共用进程；工具对照见上表）。
 - [`GET /v1/images/models`](#list-image-providers-and-models)：获取支持的图片 provider 与模型目录。
 - [`POST /v1/images/generations`](#generate-image-synchronously)：通过指定 provider 和 model 同步生成一张图片。
 - [`POST /v1/images/generations/async`](#create-image-generation-task)：创建统一图片生成异步任务。
@@ -817,10 +940,12 @@ Use a theme-aware reference card with the custom `:::reference` block:
 Standard Markdown blockquotes (`> 引用内容`) remain supported as well.
 
 ## Project files
-- `server.py`: Flask app exposing the unified API endpoints
+- `server.py`: Flask app exposing the unified REST API endpoints
+- `asgi.py`: Combined ASGI app (Flask REST + Streamable HTTP MCP at `/mcp`)
+- `lib/mcp/`: MCP tools, in-process Flask dispatch, and stdio/HTTP entry point
 - `docs/IMAGE_API_SOURCES.md`: Upstream image provider documentation, protocol notes, and update checklist
 - `lib/wechat/`: Markdown → WeChat HTML converter, themes, and draft-box publisher (ported from wewrite)
-- `Dockerfile`: uv-based container image using Gunicorn
+- `Dockerfile`: uv-based container image using Gunicorn + Uvicorn workers
 - `pyproject.toml`: dependencies (managed by uv)
 - `LICENSE`: MIT
 

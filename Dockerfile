@@ -23,10 +23,14 @@ RUN uv venv /app/.venv && \
 
 # Copy the full application source (future files included).
 COPY . .
+RUN uv sync --no-dev
 
 EXPOSE 8000
 
-# Keep slow provider calls from blocking every API request. Image generation
-# should still prefer the async endpoint, but multiple threaded workers keep
-# health/model/task-status requests responsive while synchronous calls run.
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--worker-class", "gthread", "--threads", "4", "--timeout", "600", "server:create_app()"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8000/health || exit 1
+
+# ASGI workers serve Flask REST routes and Streamable HTTP MCP at /mcp.
+# Flask still runs in a thread pool (a2wsgi), so slow provider calls do not
+# block MCP session handling. Prefer the async image endpoint for long jobs.
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--worker-class", "uvicorn.workers.UvicornWorker", "--timeout", "600", "asgi:app"]

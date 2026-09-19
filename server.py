@@ -12,6 +12,14 @@ from io import BytesIO
 
 from flask import Flask, jsonify, request
 from werkzeug.exceptions import RequestEntityTooLarge
+
+from lib.auth import (
+    configured_api_token,
+    is_public_path,
+    request_token,
+    token_is_valid,
+    unauthorized_payload,
+)
 import dashscope
 from dashscope.audio.tts_v2 import SpeechSynthesizer
 import requests
@@ -68,6 +76,25 @@ app.config["MAX_CONTENT_LENGTH"] = int(
 @app.errorhandler(413)
 def request_too_large(_error):
     return jsonify({"error": "request body exceeds the configured size limit"}), 413
+
+
+@app.route("/health", methods=["GET"])
+def health_endpoint():
+    """Liveness probe for the REST-only Flask server."""
+    return jsonify({"status": "ok", "http": True, "mcp": False})
+
+
+@app.before_request
+def require_api_token():
+    expected = configured_api_token()
+    if expected is None or is_public_path(request.path):
+        return None
+    if token_is_valid(request_token(request.headers), expected):
+        return None
+    response = jsonify(unauthorized_payload())
+    response.status_code = 401
+    response.headers["WWW-Authenticate"] = "Bearer"
+    return response
 
 
 DEFAULT_MODEL = "cosyvoice-v2"
