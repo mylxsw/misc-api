@@ -3,6 +3,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from bs4 import BeautifulSoup
+
 from lib.wechat import WeChatConverter, list_themes, load_theme
 from lib.wechat.cli import build_preview_document, main
 
@@ -81,6 +83,94 @@ class WeChatCliTest(unittest.TestCase):
         self.assertRegex(result.html, r'<td[^>]+data-darkmode-bgcolor="transparent"')
         self.assertRegex(result.html, r'<tr[^>]+data-darkmode-bgcolor="transparent"')
         self.assertRegex(result.html, r'<code[^>]+data-darkmode-bgcolor="#242424"')
+
+    def test_block_code_uses_explicit_wechat_safe_breaks_and_spaces(self):
+        result = WeChatConverter().convert(
+            "正文中的 `inline_code`。\n\n"
+            "```python\n"
+            "from package import value\n"
+            "if value:\n"
+            "    print(value)\n"
+            "```"
+        )
+        soup = BeautifulSoup(result.html, "html.parser")
+
+        self.assertIsNone(soup.find("pre"))
+        self.assertEqual(soup.find("code").get_text(), "inline_code")
+        self.assertTrue(
+            any("正文中的" in paragraph.get_text() for paragraph in soup.find_all("p"))
+        )
+
+        code_block = next(
+            section
+            for section in soup.find_all("section")
+            if "from package" in section.get_text()
+        )
+        self.assertEqual(len(code_block.find_all("br")), 3)
+        self.assertIn("from package import value", code_block.get_text())
+        self.assertIn("\u00a0\u00a0\u00a0\u00a0print(value)", code_block.get_text())
+        self.assertNotIn("white-space:", code_block.get("style", ""))
+        self.assertIn("overflow-x: auto", code_block.get("style", ""))
+        self.assertIn("max-width: 100%", code_block.get("style", ""))
+        self.assertIn("overflow-wrap: anywhere", code_block.get("style", ""))
+        self.assertEqual(code_block["data-darkmode-bgcolor"], "#2d2d2d")
+        code_content = code_block.find("p", recursive=False)
+        self.assertEqual(code_content["data-darkmode-color"], "#d4d4d4")
+        self.assertFalse(code_content.find_all("span"))
+
+    def test_block_code_preserves_blank_lines_tabs_and_html_characters(self):
+        result = WeChatConverter().convert(
+            "```\n"
+            "\tif left < right:\n"
+            "\n"
+            "\t\tprint(\"A & B\")\n"
+            "```"
+        )
+        soup = BeautifulSoup(result.html, "html.parser")
+        code_block = soup.find("section")
+        code_content = code_block.find("p", recursive=False)
+
+        self.assertEqual(len(code_content.find_all("br")), 3)
+        self.assertIn("\u00a0" * 4 + "if", code_content.get_text())
+        self.assertIn("\u00a0" * 8 + 'print("A & B")', code_content.get_text())
+        self.assertIn("<", code_content.get_text())
+        self.assertIn("&lt;", str(code_content))
+        self.assertIn("&amp;", str(code_content))
+        self.assertNotIn("\n", str(code_content))
+        self.assertIn("<br/><br/>", str(code_content))
+
+    def test_raw_html_pre_block_is_also_made_wechat_safe(self):
+        result = WeChatConverter().convert("<pre>line one\n  line two</pre>")
+        soup = BeautifulSoup(result.html, "html.parser")
+
+        self.assertIsNone(soup.find("pre"))
+        code_block = soup.find("section")
+        code_content = code_block.find("p", recursive=False)
+        self.assertEqual(len(code_content.find_all("br")), 1)
+        self.assertEqual(code_content.get_text(), "line one\u00a0\u00a0line two")
+
+    def test_mixed_raw_pre_converts_newlines_inside_and_outside_code(self):
+        result = WeChatConverter().convert(
+            "<pre>outer one\n<code>inner one\n  inner two</code>\nouter two</pre>"
+        )
+        soup = BeautifulSoup(result.html, "html.parser")
+        code_block = soup.find("section")
+
+        self.assertIsNone(soup.find("pre"))
+        self.assertEqual(len(code_block.find_all("br")), 3)
+        self.assertNotIn("\n", str(code_block))
+        self.assertIn("\u00a0\u00a0inner two", code_block.get_text())
+
+    def test_long_code_line_keeps_scroll_and_wrap_fallbacks(self):
+        long_line = "prefix " + "x" * 500
+        result = WeChatConverter().convert(f"```text\n{long_line}\n```")
+        soup = BeautifulSoup(result.html, "html.parser")
+        code_block = soup.find("section")
+
+        self.assertIn(long_line, code_block.get_text())
+        self.assertIn("overflow-x: auto", code_block["style"])
+        self.assertIn("overflow-wrap: anywhere", code_block["style"])
+        self.assertIn("max-width: 100%", code_block["style"])
 
     def test_main_reports_unknown_theme(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -6,6 +6,25 @@ from server import app
 
 
 class WeChatDraftAPITest(unittest.TestCase):
+    def test_markdown_preview_returns_wechat_safe_code_block(self):
+        with app.test_client() as client:
+            response = client.post(
+                "/v1/wechat/markdown/preview",
+                json={
+                    "markdown": (
+                        "# 标题\n\n```python\nfrom package import value\n"
+                        "if value:\n    print(value)\n```"
+                    )
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        html = response.get_json()["html"]
+        self.assertNotIn("<pre", html)
+        self.assertIn("<section", html)
+        self.assertIn("<br", html)
+        self.assertIn("\u00a0" * 4 + "print(value)", html)
+
     @patch("server.get_access_token", return_value="token")
     @patch("server.list_drafts")
     def test_list_drafts_uses_defaults(self, list_drafts, _token):

@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import Optional
 
 import markdown
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString
 
-from .theme import Theme, load_theme, get_inline_css_rules
+from .theme import Theme, get_inline_css_rules, load_theme
 
 
 @dataclass
@@ -80,8 +80,12 @@ class WeChatConverter:
         # Apply WeChat compatibility fixes
         html = self._apply_wechat_fixes(html)
 
-        # Inject dark mode attributes
+        # Inject dark mode attributes while code blocks are still <pre>/<code>.
         html = self._inject_darkmode(html)
+
+        # WeChat collapses <pre> whitespace; switch to explicit breaks/spaces
+        # after dark-mode code attributes have been attached.
+        html = self._make_code_blocks_wechat_safe(html)
 
         # Apply CSS randomization if enabled (anti-fingerprint for WeChat low-creativity detection)
         if self._theme.colors.get("css_randomize") or getattr(self._theme, '_raw_data', {}).get('css_randomize'):
@@ -135,14 +139,100 @@ class WeChatConverter:
             "markdown.extensions.codehilite",
         ]
         extension_configs = {
-            "codehilite": {
+            "markdown.extensions.codehilite": {
                 "linenums": False,
-                "guess_lang": True,
-                "noclasses": True,  # Inline syntax highlight styles
+                # Inline Pygments styles are large and its default palette has
+                # poor contrast on the dark code backgrounds used by themes.
+                "use_pygments": False,
             }
         }
         md = markdown.Markdown(extensions=extensions, extension_configs=extension_configs)
         return md.convert(text)
+
+    def _make_code_blocks_wechat_safe(self, html: str) -> str:
+        """Render block code without relying on ``pre`` whitespace semantics.
+
+        The WeChat draft editor normalizes newlines inside ``pre`` elements and
+        may ignore ``white-space: pre-wrap``. Explicit ``br`` elements and NBSP
+        characters survive that normalization while preserving Pygments spans.
+        """
+        soup = BeautifulSoup(html, "html.parser")
+
+        for pre in soup.find_all("pre"):
+            code = pre.find("code")
+            if code is None:
+                code = soup.new_tag("code")
+                for child in list(pre.contents):
+                    code.append(child.extract())
+                for prop, value in self._css_rules.get("pre code", {}).items():
+                    code["style"] = (
+                        f'{code.get("style", "")}; {prop}: {value}'.strip("; ")
+                    )
+                if pre.get("data-darkmode-color"):
+                    code["data-darkmode-color"] = pre["data-darkmode-color"]
+                pre.append(code)
+
+            for text_node in list(pre.find_all(string=True)):
+                expanded = str(text_node).expandtabs(4)
+                lines = expanded.split("\n")
+                for index, line in enumerate(lines):
+                    if line:
+                        # Keep ordinary token separators copyable as ASCII.
+                        # Only indentation/alignment runs need non-collapsing
+                        # spaces for WeChat's HTML normalizer.
+                        line = re.sub(
+                            r"(^ +| {2,}| +$)",
+                            lambda match: "\u00a0" * len(match.group(0)),
+                            line,
+                        )
+                        text_node.insert_before(
+                            NavigableString(line)
+                        )
+                    if index < len(lines) - 1:
+                        text_node.insert_before(soup.new_tag("br"))
+                text_node.extract()
+
+            # Empty Pygments marker spans add no value and can confuse WeChat's
+            # editor normalization. The leading marker is a sibling of <code>.
+            for span in pre.find_all("span"):
+                if not span.get_text() and span.find("br") is None:
+                    span.decompose()
+
+            pre.name = "section"
+            code.name = "p"
+            for element in [pre, *pre.find_all(True)]:
+                element.attrs.pop("class", None)
+
+            style_parts = []
+            for declaration in pre.get("style", "").split(";"):
+                declaration = declaration.strip()
+                if not declaration or ":" not in declaration:
+                    continue
+                prop = declaration.split(":", 1)[0].strip().lower()
+                if prop != "white-space":
+                    style_parts.append(declaration)
+            existing_props = {
+                item.split(":", 1)[0].strip().lower() for item in style_parts
+            }
+            if "max-width" not in existing_props:
+                style_parts.append("max-width: 100%")
+            if "box-sizing" not in existing_props:
+                style_parts.append("box-sizing: border-box")
+            style_parts.extend(("word-wrap: break-word", "overflow-wrap: anywhere"))
+            pre["style"] = "; ".join(style_parts)
+
+            code_style = code.get("style", "")
+            code["style"] = f"{code_style}; margin: 0" if code_style else "margin: 0"
+
+            parent = pre.parent
+            if (
+                parent
+                and parent.name == "div"
+                and "codehilite" in parent.get("class", [])
+            ):
+                parent.unwrap()
+
+        return str(soup)
 
     def _enhance_code_blocks(self, html: str) -> str:
         """Add data-lang attribute to <pre> elements for language labeling."""
@@ -222,7 +312,6 @@ class WeChatConverter:
         """
         Apply WeChat-specific compatibility fixes:
         1. Force explicit color on every <p> tag
-        2. Ensure code blocks preserve whitespace
         """
         soup = BeautifulSoup(html, "html.parser")
         text_color = self._theme.colors.get("text", "#333333")
@@ -232,12 +321,6 @@ class WeChatConverter:
             style = p.get("style", "")
             if "color" not in style:
                 p["style"] = f"{style}; color: {text_color}" if style else f"color: {text_color}"
-
-        # Fix 2: Ensure <pre> has whitespace preservation
-        for pre in soup.find_all("pre"):
-            style = pre.get("style", "")
-            if "white-space" not in style:
-                pre["style"] = f"{style}; white-space: pre-wrap; word-wrap: break-word" if style else "white-space: pre-wrap; word-wrap: break-word"
 
         return str(soup)
 
