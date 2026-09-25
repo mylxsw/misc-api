@@ -37,6 +37,40 @@ class WeChatImagePostTest(unittest.TestCase):
                 headers=self.headers,
             )
 
+    def put(self, payload=None):
+        with app.test_client() as client:
+            return client.put(
+                "/v1/wechat/images/draft/draft-1",
+                json=self.payload if payload is None else payload,
+                headers=self.headers,
+            )
+
+    @patch("server.update_draft")
+    @patch("server.upload_thumb_bytes", side_effect=["permanent-1", "permanent-2"])
+    @patch("server.load_image_bytes", return_value=(png_bytes(), "image.png"))
+    @patch("server.get_draft", return_value={"news_item": [{"article_type": "newspic"}]})
+    @patch("server.get_access_token", return_value="token")
+    def test_picture_draft_update_replaces_ordered_images(self, token, get, load, upload, update):
+        response = self.put()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json["updated"])
+        article = update.call_args.args[3]
+        self.assertEqual(article["article_type"], "newspic")
+        self.assertEqual(article["image_info"]["image_list"], [
+            {"image_media_id": "permanent-1"}, {"image_media_id": "permanent-2"}
+        ])
+
+    @patch("server.update_draft")
+    @patch("server.upload_thumb_bytes")
+    @patch("server.load_image_bytes", side_effect=[(png_bytes(), "image.png"), (b"broken", "bad.png")])
+    @patch("server.get_draft", return_value={"news_item": [{"article_type": "newspic"}]})
+    @patch("server.get_access_token", return_value="token")
+    def test_picture_draft_update_invalid_last_image_does_not_update(self, token, get, load, upload, update):
+        response = self.put()
+        self.assertEqual(response.status_code, 400)
+        upload.assert_not_called()
+        update.assert_not_called()
+
     @patch("lib.wechat.publisher.requests.post")
     @patch("server.upload_thumb_bytes", side_effect=["permanent-1", "permanent-2"])
     @patch("server.get_access_token", return_value="private-token")

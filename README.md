@@ -217,6 +217,7 @@ is permanent.
 ### Create picture draft
 
 - **POST** `/v1/wechat/images/draft`
+- **PUT** `/v1/wechat/images/draft/<media_id>`：使用相同的标题、文案和有序图片 URL 完整替换已有贴图草稿。先读取草稿并验证类型；图片全部校验、上传成功后才更新。草稿不存在时返回 404，调用方可再创建。更新结果未确认时返回 `outcome: uncertain`，调用方应检查草稿箱，不能盲目重试。
 - 认证复用 `X-WeChat-AppId` / `X-WeChat-AppSecret` 请求头，或既有 `appid` / `secret` 请求体和环境变量配置。不要把凭证放进 URL。
 - 该接口创建一条 `article_type: newspic` 图片消息，保存到草稿箱，不发布、不群发。普通 Markdown 文章接口不变。
 

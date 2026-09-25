@@ -907,6 +907,59 @@ def wechat_image_draft_endpoint():
     })
 
 
+@app.route("/v1/wechat/images/draft/<path:media_id>", methods=["PUT"])
+def wechat_image_draft_update_endpoint(media_id):
+    """Replace an existing native picture draft from ordered public image URLs."""
+    from lib.wechat.image_post import validate_image_post, validate_picture
+
+    payload = request.get_json(silent=True)
+    if not media_id.strip() or not isinstance(payload, dict):
+        return jsonify({"error": "media_id and JSON body are required", "stage": "validation"}), 400
+    try:
+        prepared = validate_image_post(payload)
+        _wechat_credentials(payload)
+        current = get_draft(_wechat_token(payload), media_id)
+        if not current.get("news_item") or current["news_item"][0].get("article_type") != "newspic":
+            raise ValueError("media_id does not identify a picture draft")
+    except WeChatDraftAPIError as exc:
+        return _wechat_draft_error_response(exc)
+    except (ValueError, TypeError) as exc:
+        return jsonify({"error": str(exc), "stage": "validation"}), 400
+
+    pictures = []
+    try:
+        for source in prepared["images"]:
+            data, filename = load_image_bytes(source)
+            validate_picture(data)
+            pictures.append((data, filename))
+    except Exception:
+        return jsonify({"error": "could not load a valid PNG/JPEG image (maximum 10 MiB)", "stage": "validation", "image_index": len(pictures)}), 400
+
+    image_media_ids = []
+    try:
+        token = _wechat_token(payload)
+        for data, filename in pictures:
+            image_media_ids.append(upload_thumb_bytes(token, data, filename))
+        if any(not isinstance(value, str) or not value.strip() for value in image_media_ids):
+            raise ValueError("missing permanent image media ID")
+    except Exception:
+        return jsonify({"error": "permanent image upload failed; draft was not updated", "stage": "upload", "image_media_ids": image_media_ids}), 502
+
+    article = {
+        "article_type": "newspic",
+        "title": prepared["title"],
+        "content": prepared["content"],
+        "need_open_comment": prepared["need_open_comment"],
+        "only_fans_can_comment": prepared["only_fans_can_comment"],
+        "image_info": {"image_list": [{"image_media_id": value} for value in image_media_ids]},
+    }
+    try:
+        update_draft(token, media_id, 0, article)
+    except Exception:
+        return jsonify({"error": "draft update was not confirmed; inspect drafts before retrying", "stage": "update", "outcome": "uncertain", "image_media_ids": image_media_ids}), 502
+    return jsonify({"media_id": media_id, "updated": True, "article_type": "newspic", "images_uploaded": len(image_media_ids), "image_media_ids": image_media_ids})
+
+
 @app.route("/v1/wechat/markdown/draft", methods=["POST"])
 def wechat_draft_endpoint():
     """Convert Markdown and push it into the WeChat Official Account draft box.
